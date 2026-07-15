@@ -23,7 +23,6 @@ export function useRoom(userId, userName) {
   const channelRef = useRef(null);
   const strokeCallbackRef = useRef(null);
   const clearCallbackRef = useRef(null);
-  const undoCallbackRef = useRef(null);
   const lastStrokeTime = useRef(0);
   const lastCursorTime = useRef(0);
   const pendingPoints = useRef([]);
@@ -72,11 +71,6 @@ export function useRoom(userId, userName) {
         }
       });
 
-      channel.on("broadcast", { event: "undo" }, ({ payload }) => {
-        if (payload.userId !== userId && undoCallbackRef.current) {
-          undoCallbackRef.current(payload);
-        }
-      });
 
       // Presence tracking
       channel.on("presence", { event: "sync" }, () => {
@@ -180,14 +174,6 @@ export function useRoom(userId, userName) {
     });
   }, [isConnected, userId]);
 
-  const broadcastUndo = useCallback(() => {
-    if (!channelRef.current || !isConnected) return;
-    channelRef.current.send({
-      type: "broadcast",
-      event: "undo",
-      payload: { userId },
-    });
-  }, [isConnected, userId]);
 
   const onStrokeReceived = useCallback((callback) => {
     strokeCallbackRef.current = callback;
@@ -197,9 +183,6 @@ export function useRoom(userId, userName) {
     clearCallbackRef.current = callback;
   }, []);
 
-  const onUndoReceived = useCallback((callback) => {
-    undoCallbackRef.current = callback;
-  }, []);
 
   // Cleanup on unmount
   useEffect(() => {
@@ -216,9 +199,7 @@ export function useRoom(userId, userName) {
     leaveRoom,
     broadcastStroke,
     broadcastClear,
-    broadcastUndo,
     onStrokeReceived,
     onClearReceived,
-    onUndoReceived,
   };
 }

@@ -6,7 +6,7 @@ import { useRef, useState, useCallback, useEffect } from "react";
 const MAX_UNDO = 50;
 export const WORLD_W = 1920;
 export const WORLD_H = 1080;
-const BG_COLOR = "#0d1020";
+const DEFAULT_BG_COLOR = "#0d1020";
 const MIN_SCALE = 0.05;
 const MAX_SCALE = 40;
 
@@ -39,10 +39,10 @@ function floodFill(imageData, sx, sy, fillRgb, tolerance) {
   sy = Math.floor(sy);
   if (sx < 0 || sx >= width || sy < 0 || sy >= height) return;
   const si = (sy * width + sx) * 4;
-  const [tr, tg, tb] = [data[si], data[si + 1], data[si + 2]];
+  const [tr, tg, tb, ta] = [data[si], data[si + 1], data[si + 2], data[si + 3]];
   const [fr, fg, fb] = fillRgb;
-  if (tr === fr && tg === fg && tb === fb) return;
-  const maxDist = tolerance * 7.65;
+  if (tr === fr && tg === fg && tb === fb && ta === 255) return;
+  const maxDist = tolerance * 10.2;
   const visited = new Uint8ClampedArray(width * height);
   const stack = [sx + sy * width];
   while (stack.length) {
@@ -55,7 +55,8 @@ function floodFill(imageData, sx, sy, fillRgb, tolerance) {
     if (
       Math.abs(data[pi] - tr) +
         Math.abs(data[pi + 1] - tg) +
-        Math.abs(data[pi + 2] - tb) >
+        Math.abs(data[pi + 2] - tb) +
+        Math.abs(data[pi + 3] - ta) >
       maxDist
     )
       continue;
@@ -70,29 +71,68 @@ function floodFill(imageData, sx, sy, fillRgb, tolerance) {
   }
 }
 
-// Smooth bezier path
+let scratchCanvas = null;
+function getScratchCanvas(w, h) {
+  if (!scratchCanvas) scratchCanvas = document.createElement("canvas");
+  if (scratchCanvas.width !== w) scratchCanvas.width = w;
+  if (scratchCanvas.height !== h) scratchCanvas.height = h;
+  return scratchCanvas;
+}
+
+// Angle between three points in radians (0 = straight, PI = sharp reversal)
+function angleBetween(a, b, c) {
+  const v1x = a.x - b.x,
+    v1y = a.y - b.y;
+  const v2x = c.x - b.x,
+    v2y = c.y - b.y;
+  const d1 = Math.hypot(v1x, v1y),
+    d2 = Math.hypot(v2x, v2y);
+  if (d1 < 0.001 || d2 < 0.001) return 0;
+  return Math.acos(
+    clamp((v1x * v2x + v1y * v2y) / (d1 * d2), -1, 1),
+  );
+}
+
+// Smooth path — uses line segments on sharp turns, curves on gentle arcs
 function renderSmoothPath(ctx, pts, strokeStyle, lineWidth, alpha, comp) {
   if (!pts || pts.length < 2) return;
+
+  const sc = getScratchCanvas(ctx.canvas.width, ctx.canvas.height);
+  const sctx = sc.getContext("2d");
+  sctx.clearRect(0, 0, sc.width, sc.height);
+
+  sctx.strokeStyle = strokeStyle;
+  sctx.lineWidth = lineWidth;
+  sctx.lineCap = "round";
+  sctx.lineJoin = "round";
+  sctx.beginPath();
+  sctx.moveTo(pts[0].x, pts[0].y);
+
+  if (pts.length === 2) {
+    sctx.lineTo(pts[1].x, pts[1].y);
+  } else {
+    for (let i = 1; i < pts.length - 1; i++) {
+      const prev = pts[i - 1],
+        curr = pts[i],
+        next = pts[i + 1];
+      const ang = angleBetween(prev, curr, next);
+      // Sharp turns (> ~55°) get straight segments to avoid corner bulging
+      if (ang > 0.95) {
+        sctx.lineTo(curr.x, curr.y);
+      } else {
+        const mx = (curr.x + next.x) / 2,
+          my = (curr.y + next.y) / 2;
+        sctx.quadraticCurveTo(curr.x, curr.y, mx, my);
+      }
+    }
+    sctx.lineTo(pts[pts.length - 1].x, pts[pts.length - 1].y);
+  }
+  sctx.stroke();
+
   ctx.save();
   ctx.globalCompositeOperation = comp || "source-over";
   ctx.globalAlpha = alpha ?? 1;
-  ctx.strokeStyle = strokeStyle;
-  ctx.lineWidth = lineWidth;
-  ctx.lineCap = "round";
-  ctx.lineJoin = "round";
-  ctx.beginPath();
-  ctx.moveTo(pts[0].x, pts[0].y);
-  if (pts.length === 2) {
-    ctx.lineTo(pts[1].x, pts[1].y);
-  } else {
-    for (let i = 1; i < pts.length - 1; i++) {
-      const mx = (pts[i].x + pts[i + 1].x) / 2,
-        my = (pts[i].y + pts[i + 1].y) / 2;
-      ctx.quadraticCurveTo(pts[i].x, pts[i].y, mx, my);
-    }
-    ctx.lineTo(pts[pts.length - 1].x, pts[pts.length - 1].y);
-  }
-  ctx.stroke();
+  ctx.drawImage(sc, 0, 0);
   ctx.restore();
 }
 
@@ -202,17 +242,19 @@ export function useCanvas({
   fillTolerance = 30,
   symmetryMode = null,
   simulatePressure = false,
+  worldBgColor = "white",
   layers,
   activeLayerIndex = 0,
   isConnected = false,
   broadcastStroke,
   broadcastClear,
-  broadcastUndo,
   onColorPicked,
   textFont = "Poppins, sans-serif",
   textSize = 24,
   textBold = false,
   textItalic = false,
+  worldW = WORLD_W,
+  worldH = WORLD_H,
 } = {}) {
   const canvasRef = useRef(null);
   const ctxRef = useRef(null);
@@ -220,19 +262,32 @@ export function useCanvas({
   const overlayRef = useRef(null);
 
   const transformRef = useRef({ scale: 1, offsetX: 0, offsetY: 0 });
+  const [transform, setTransform] = useState({ scale: 1, offsetX: 0, offsetY: 0 });
   const [zoom, setZoom] = useState(1);
 
   const pointerCacheRef = useRef(new Map());
   const isDrawingRef = useRef(false);
   const isPinchingRef = useRef(false);
+  const isPanningRef = useRef(false);
+  const isMovingImageRef = useRef(false);
+  const movingImageRef = useRef(null);
+  const imageMoveStartRef = useRef({ x: 0, y: 0 });
+  const imageObjectsRef = useRef([]);
+  const panStartRef = useRef({ x: 0, y: 0 });
+  const spaceHeldRef = useRef(false);
   const lastPinchDistRef = useRef(0);
   const lastPinchMidRef = useRef({ x: 0, y: 0 });
+  const pointerPressureRef = useRef(0.5);
 
   const currentPtsRef = useRef([]);
   const smoothBufRef = useRef([]);
   const prevPtRef = useRef(null);
   const lastTimeRef = useRef(0);
   const lastDistRef = useRef(0);
+  const stabilizerAnchorRef = useRef(null);
+
+  const worldWRef = useRef(worldW);
+  const worldHRef = useRef(worldH);
 
   const undoStackRef = useRef([]);
   const redoStackRef = useRef([]);
@@ -307,6 +362,12 @@ export function useCanvas({
   useEffect(() => {
     simulatePressureRef.current = simulatePressure;
   }, [simulatePressure]);
+  const worldBgColorRef = useRef(worldBgColor);
+  useEffect(() => {
+    worldBgColorRef.current = worldBgColor;
+  }, [worldBgColor]);
+
+  const getBgColor = useCallback(() => worldBgColorRef.current || DEFAULT_BG_COLOR, []);
   const textFontRef = useRef(textFont);
   useEffect(() => {
     textFontRef.current = textFont;
@@ -324,12 +385,41 @@ export function useCanvas({
     textItalicRef.current = textItalic;
   }, [textItalic]);
 
+  // ── Space key for pan mode ────────────────────────────────────────────────────
+  useEffect(() => {
+    const onKeyDown = (e) => {
+      if (
+        e.code === "Space" &&
+        !e.repeat &&
+        !e.target.closest("input, textarea, select, button")
+      ) {
+        e.preventDefault();
+        spaceHeldRef.current = true;
+        if (canvasRef.current) canvasRef.current.style.cursor = "grab";
+      }
+    };
+    const onKeyUp = (e) => {
+      if (e.code === "Space") {
+        e.preventDefault();
+        spaceHeldRef.current = false;
+        if (canvasRef.current && !isPanningRef.current)
+          canvasRef.current.style.cursor = "";
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+    };
+  }, []);
+
   // ── Layer helpers ─────────────────────────────────────────────────────────────
   const ensureLayerCanvas = useCallback((id) => {
     if (!layerCanvasesRef.current[id]) {
       const c = document.createElement("canvas");
-      c.width = WORLD_W;
-      c.height = WORLD_H;
+      c.width = worldWRef.current;
+      c.height = worldHRef.current;
       layerCanvasesRef.current[id] = c;
     }
     return layerCanvasesRef.current[id];
@@ -342,12 +432,23 @@ export function useCanvas({
   const initLayerCanvas = useCallback(
     (id) => {
       const c = ensureLayerCanvas(id);
-      c.getContext("2d").clearRect(0, 0, WORLD_W, WORLD_H);
+      c.getContext("2d").clearRect(0, 0, worldWRef.current, worldHRef.current);
     },
     [ensureLayerCanvas],
   );
   const deleteLayerCanvas = useCallback((id) => {
     delete layerCanvasesRef.current[id];
+  }, []);
+
+  const updateTransform = useCallback((t) => {
+    transformRef.current = t;
+    setTransform(t);
+    setZoom(t.scale);
+  }, []);
+
+  const getBackgroundLayerId = useCallback(() => {
+    const ls = layersRef.current;
+    return ls?.[0]?.id ?? null;
   }, []);
 
   // ── Composite ─────────────────────────────────────────────────────────────────
@@ -362,8 +463,8 @@ export function useCanvas({
     ctx.fillStyle = "#111827";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     ctx.setTransform(scale, 0, 0, scale, offsetX, offsetY);
-    ctx.fillStyle = BG_COLOR;
-    ctx.fillRect(0, 0, WORLD_W, WORLD_H);
+    ctx.fillStyle = getBgColor();
+    ctx.fillRect(0, 0, worldWRef.current, worldHRef.current);
 
     if (ls) {
       for (const l of ls) {
@@ -378,6 +479,11 @@ export function useCanvas({
     const ov = overlayRef.current;
     if (ov) ctx.drawImage(ov, 0, 0);
 
+    // Imported images (movable overlays)
+    for (const imgObj of imageObjectsRef.current) {
+      ctx.drawImage(imgObj.img, imgObj.x, imgObj.y, imgObj.w, imgObj.h);
+    }
+
     const sm = symmetryModeRef.current;
     if (sm) {
       ctx.save();
@@ -386,21 +492,21 @@ export function useCanvas({
       ctx.setLineDash([6 / scale, 6 / scale]);
       if (sm === "h" || sm === "both") {
         ctx.beginPath();
-        ctx.moveTo(WORLD_W / 2, 0);
-        ctx.lineTo(WORLD_W / 2, WORLD_H);
+        ctx.moveTo(worldWRef.current / 2, 0);
+        ctx.lineTo(worldWRef.current / 2, worldHRef.current);
         ctx.stroke();
       }
       if (sm === "v" || sm === "both") {
         ctx.beginPath();
-        ctx.moveTo(0, WORLD_H / 2);
-        ctx.lineTo(WORLD_W, WORLD_H / 2);
+        ctx.moveTo(0, worldHRef.current / 2);
+        ctx.lineTo(worldWRef.current, worldHRef.current / 2);
         ctx.stroke();
       }
       ctx.setLineDash([]);
       ctx.restore();
     }
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-  }, []);
+  }, [getBgColor]);
 
   const scheduleRedraw = useCallback(() => {
     needsRedrawRef.current = true;
@@ -427,16 +533,17 @@ export function useCanvas({
       ctx.lineJoin = "round";
       ctxRef.current = ctx;
       const ov = document.createElement("canvas");
-      ov.width = WORLD_W;
-      ov.height = WORLD_H;
+      ov.width = worldWRef.current;
+      ov.height = worldHRef.current;
       overlayRef.current = ov;
-      const s = Math.min(el.width / WORLD_W, el.height / WORLD_H) * 0.92;
-      transformRef.current = {
+      const s =
+        Math.min(el.width / worldWRef.current, el.height / worldHRef.current) *
+        0.92;
+      updateTransform({
         scale: s,
-        offsetX: (el.width - WORLD_W * s) / 2,
-        offsetY: (el.height - WORLD_H * s) / 2,
-      };
-      setZoom(s);
+        offsetX: (el.width - worldWRef.current * s) / 2,
+        offsetY: (el.height - worldHRef.current * s) / 2,
+      });
       const ls = layersRef.current;
       if (ls) {
         ls.forEach((l, i) => {
@@ -444,8 +551,8 @@ export function useCanvas({
           if (i === 0) {
             const lc = layerCanvasesRef.current[l.id];
             const lctx = lc.getContext("2d");
-            lctx.fillStyle = BG_COLOR;
-            lctx.fillRect(0, 0, WORLD_W, WORLD_H);
+            lctx.fillStyle = getBgColor();
+            lctx.fillRect(0, 0, worldWRef.current, worldHRef.current);
           }
         });
       }
@@ -458,7 +565,7 @@ export function useCanvas({
       window.addEventListener("resize", onResize);
       return () => window.removeEventListener("resize", onResize);
     },
-    [ensureLayerCanvas, composite, scheduleRedraw],
+    [ensureLayerCanvas, composite, scheduleRedraw, getBgColor, updateTransform],
   );
 
   useEffect(() => {
@@ -473,18 +580,44 @@ export function useCanvas({
     return { x: (sx - offsetX) / scale, y: (sy - offsetY) / scale };
   }, []);
 
+  const worldToScreen = useCallback((wx, wy) => {
+    const { scale, offsetX, offsetY } = transformRef.current;
+    return { x: wx * scale + offsetX, y: wy * scale + offsetY };
+  }, []);
+
+  const hitTestImage = useCallback((wx, wy) => {
+    const imgs = imageObjectsRef.current;
+    for (let i = imgs.length - 1; i >= 0; i--) {
+      const img = imgs[i];
+      if (
+        wx >= img.x &&
+        wx <= img.x + img.w &&
+        wy >= img.y &&
+        wy <= img.y + img.h
+      )
+        return img;
+    }
+    return null;
+  }, []);
+
   // ── Undo/Redo ─────────────────────────────────────────────────────────────────
   const getActiveLayerId = useCallback(() => {
     const ls = layersRef.current;
     return ls?.[activeLayerIndexRef.current]?.id ?? null;
   }, []);
 
+  const isBackgroundLayer = useCallback(() => {
+    return getActiveLayerId() === getBackgroundLayerId();
+  }, [getActiveLayerId, getBackgroundLayerId]);
+
   const pushUndo = useCallback(() => {
     const id = getActiveLayerId();
     if (!id) return;
     const lc = layerCanvasesRef.current[id];
     if (!lc) return;
-    const imageData = lc.getContext("2d").getImageData(0, 0, WORLD_W, WORLD_H);
+    const imageData = lc
+      .getContext("2d")
+      .getImageData(0, 0, worldWRef.current, worldHRef.current);
     undoStackRef.current.push({ layerId: id, imageData });
     if (undoStackRef.current.length > MAX_UNDO) undoStackRef.current.shift();
     redoStackRef.current = [];
@@ -498,12 +631,11 @@ export function useCanvas({
     const lctx = lc.getContext("2d");
     redoStackRef.current.push({
       layerId: entry.layerId,
-      imageData: lctx.getImageData(0, 0, WORLD_W, WORLD_H),
+      imageData: lctx.getImageData(0, 0, worldWRef.current, worldHRef.current),
     });
     lctx.putImageData(entry.imageData, 0, 0);
     scheduleRedraw();
-    if (isConnected && broadcastUndo) broadcastUndo();
-  }, [isConnected, broadcastUndo, scheduleRedraw]);
+  }, [scheduleRedraw]);
 
   const redo = useCallback(() => {
     const entry = redoStackRef.current.pop();
@@ -513,7 +645,7 @@ export function useCanvas({
     const lctx = lc.getContext("2d");
     undoStackRef.current.push({
       layerId: entry.layerId,
-      imageData: lctx.getImageData(0, 0, WORLD_W, WORLD_H),
+      imageData: lctx.getImageData(0, 0, worldWRef.current, worldHRef.current),
     });
     lctx.putImageData(entry.imageData, 0, 0);
     scheduleRedraw();
@@ -527,46 +659,55 @@ export function useCanvas({
     return lc ? lc.getContext("2d") : null;
   }, [getActiveLayerId]);
 
-  const drawPathToCtx = useCallback((ctx, pts, opts) => {
-    const { color: c, width: w, opacity: op, erase, brushType: bt } = opts;
-    if (!ctx || !pts || pts.length < 2) return;
-    if (bt === "airbrush" && !erase) {
-      renderAirbrush(ctx, pts, c, w * 2, op);
-      return;
-    }
-    let sw = w,
-      alpha = op,
-      comp = "source-over",
-      ss = c;
-    if (erase) {
-      comp = "destination-out";
-      ss = "rgba(0,0,0,1)";
-      sw = w * 2.5;
-      alpha = 1;
-    } else
-      switch (bt) {
-        case "pencil":
-          alpha = op * 0.55;
-          sw = w * 0.8;
-          break;
-        case "marker":
-          alpha = op * 0.85;
-          sw = w * 1.4;
-          break;
-        case "watercolor":
-          alpha = op * 0.12;
-          sw = w * 1.3;
-          break;
+  const drawPathToCtx = useCallback(
+    (ctx, pts, opts) => {
+      const { color: c, width: w, opacity: op, erase, brushType: bt, eraseToBg } =
+        opts;
+      if (!ctx || !pts || pts.length < 2) return;
+      if (bt === "airbrush" && !erase) {
+        renderAirbrush(ctx, pts, c, w * 2, op);
+        return;
       }
-    renderSmoothPath(ctx, pts, ss, sw, alpha, comp);
-    if (bt === "watercolor" && !erase)
-      renderSmoothPath(ctx, pts, ss, sw * 1.8, alpha * 0.4, comp);
-  }, []);
+      let sw = w,
+        alpha = op,
+        comp = "source-over",
+        ss = c;
+      if (erase) {
+        if (eraseToBg) {
+          comp = "source-over";
+          ss = getBgColor();
+        } else {
+          comp = "destination-out";
+          ss = "rgba(0,0,0,1)";
+        }
+        sw = w * 2.5;
+        alpha = 1;
+      } else
+        switch (bt) {
+          case "pencil":
+            alpha = op * 0.55;
+            sw = w * 0.8;
+            break;
+          case "marker":
+            alpha = op * 0.85;
+            sw = w * 1.4;
+            break;
+          case "watercolor":
+            alpha = op * 0.12;
+            sw = w * 1.3;
+            break;
+        }
+      renderSmoothPath(ctx, pts, ss, sw, alpha, comp);
+      if (bt === "watercolor" && !erase)
+        renderSmoothPath(ctx, pts, ss, sw * 1.8, alpha * 0.4, comp);
+    },
+    [getBgColor],
+  );
 
   const clearOverlay = useCallback(() => {
     const ov = overlayRef.current;
     if (!ov) return;
-    ov.getContext("2d").clearRect(0, 0, WORLD_W, WORLD_H);
+    ov.getContext("2d").clearRect(0, 0, worldWRef.current, worldHRef.current);
   }, []);
 
   const commitStroke = useCallback(
@@ -578,12 +719,19 @@ export function useCanvas({
       if (sm && !opts.erase) {
         const mirrors = [];
         if (sm === "h" || sm === "both")
-          mirrors.push(pts.map((p) => ({ x: WORLD_W - p.x, y: p.y })));
+          mirrors.push(
+            pts.map((p) => ({ x: worldWRef.current - p.x, y: p.y })),
+          );
         if (sm === "v" || sm === "both")
-          mirrors.push(pts.map((p) => ({ x: p.x, y: WORLD_H - p.y })));
+          mirrors.push(
+            pts.map((p) => ({ x: p.x, y: worldHRef.current - p.y })),
+          );
         if (sm === "both")
           mirrors.push(
-            pts.map((p) => ({ x: WORLD_W - p.x, y: WORLD_H - p.y })),
+            pts.map((p) => ({
+              x: worldWRef.current - p.x,
+              y: worldHRef.current - p.y,
+            })),
           );
         for (const mp of mirrors) drawPathToCtx(ctx, mp, opts);
       }
@@ -591,27 +739,48 @@ export function useCanvas({
     [getActiveCtx, drawPathToCtx],
   );
 
-  // ── Smoothing ─────────────────────────────────────────────────────────────────
+  // ── Stabilizer (pulled-string / lazy brush) ────────────────────────────────────
   const getSmoothedPt = useCallback((rawPt) => {
-    const K =
-      smoothingRef.current <= 0 ? 1 : Math.ceil(smoothingRef.current / 8);
-    smoothBufRef.current.push(rawPt);
-    if (smoothBufRef.current.length > K) smoothBufRef.current.shift();
-    const buf = smoothBufRef.current;
-    return {
-      x: buf.reduce((s, p) => s + p.x, 0) / buf.length,
-      y: buf.reduce((s, p) => s + p.y, 0) / buf.length,
-    };
+    const strength = smoothingRef.current;
+    if (strength <= 0) return rawPt;
+
+    // Dead zone radius scales with smoothing (1–100 → 2–40px)
+    const deadZone = 2 + (strength / 100) * 38;
+
+    if (!stabilizerAnchorRef.current) {
+      stabilizerAnchorRef.current = { x: rawPt.x, y: rawPt.y };
+      return rawPt;
+    }
+
+    const anchor = stabilizerAnchorRef.current;
+    const dx = rawPt.x - anchor.x;
+    const dy = rawPt.y - anchor.y;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+
+    if (dist <= deadZone) return { ...anchor, pressure: rawPt.pressure };
+
+    // Pull toward cursor, leaving deadZone gap
+    const pull = (dist - deadZone) / dist;
+    anchor.x += dx * pull;
+    anchor.y += dy * pull;
+
+    return { x: anchor.x, y: anchor.y, pressure: rawPt.pressure };
   }, []);
 
-  const getPressureWidth = useCallback((base) => {
+  const getPressureWidth = useCallback((base, pressure) => {
     if (!simulatePressureRef.current) return base;
+    const p = pressure ?? pointerPressureRef.current;
+    // Real stylus/tablet pressure (0–1); 0.5 is the mouse default
+    if (p > 0 && p < 1 && Math.abs(p - 0.5) > 0.02) {
+      return base * clamp(p * 1.8, 0.3, 2.5);
+    }
+    // Mouse fallback: thin when fast, thick when slow
     const now = performance.now();
     const dt = Math.max(now - lastTimeRef.current, 1);
     lastTimeRef.current = now;
     const speed = lastDistRef.current / dt;
     lastDistRef.current = 0;
-    return base * clamp(1 - speed * 0.08, 0.4, 2.0);
+    return base * clamp(1.4 - speed * 0.06, 0.35, 1.8);
   }, []);
 
   // ── Wheel zoom ────────────────────────────────────────────────────────────────
@@ -626,15 +795,14 @@ export function useCanvas({
         wy = (sy - offsetY) / scale;
       const delta = e.deltaY > 0 ? 0.9 : 1.1;
       const ns = clamp(scale * delta, MIN_SCALE, MAX_SCALE);
-      transformRef.current = {
+      updateTransform({
         scale: ns,
         offsetX: sx - wx * ns,
         offsetY: sy - wy * ns,
-      };
-      setZoom(ns);
+      });
       scheduleRedraw();
     },
-    [scheduleRedraw],
+    [scheduleRedraw, updateTransform],
   );
 
   // ── Pointer Down ──────────────────────────────────────────────────────────────
@@ -659,6 +827,35 @@ export function useCanvas({
       if (pointerCacheRef.current.size > 1) return;
 
       const { x: wx, y: wy } = screenToWorld(nx, ny);
+
+      // Middle mouse on image → move image; otherwise pan
+      if (e.button === 1) {
+        const hit = hitTestImage(wx, wy);
+        if (hit) {
+          isMovingImageRef.current = true;
+          movingImageRef.current = hit;
+          imageMoveStartRef.current = { x: wx - hit.x, y: wy - hit.y };
+          canvasRef.current?.setPointerCapture(e.pointerId);
+          if (canvasRef.current) canvasRef.current.style.cursor = "move";
+          return;
+        }
+        isPanningRef.current = true;
+        panStartRef.current = { x: e.clientX, y: e.clientY };
+        canvasRef.current?.setPointerCapture(e.pointerId);
+        if (canvasRef.current) canvasRef.current.style.cursor = "grabbing";
+        return;
+      }
+
+      // Space + click → pan only (no tool action)
+      if (spaceHeldRef.current) {
+        isPanningRef.current = true;
+        panStartRef.current = { x: e.clientX, y: e.clientY };
+        canvasRef.current?.setPointerCapture(e.pointerId);
+        if (canvasRef.current) canvasRef.current.style.cursor = "grabbing";
+        return;
+      }
+
+      pointerPressureRef.current = e.pressure || 0.5;
       const t = toolRef.current;
 
       if (t === "text") {
@@ -675,12 +872,20 @@ export function useCanvas({
         const lc = layerCanvasesRef.current[id];
         if (!lc) return;
         const lctx = lc.getContext("2d");
-        const imgData = lctx.getImageData(0, 0, WORLD_W, WORLD_H);
+        const imgData = lctx.getImageData(
+          0,
+          0,
+          worldWRef.current,
+          worldHRef.current,
+        );
+        const fillRgb = isBackgroundLayer()
+          ? hexToRgb(getBgColor())
+          : hexToRgb(colorRef.current);
         floodFill(
           imgData,
           wx,
           wy,
-          hexToRgb(colorRef.current),
+          fillRgb,
           fillToleranceRef.current,
         );
         lctx.putImageData(imgData, 0, 0);
@@ -690,11 +895,11 @@ export function useCanvas({
 
       if (t === "eyedropper") {
         const tmp = document.createElement("canvas");
-        tmp.width = WORLD_W;
-        tmp.height = WORLD_H;
+        tmp.width = worldWRef.current;
+        tmp.height = worldHRef.current;
         const tctx = tmp.getContext("2d");
-        tctx.fillStyle = BG_COLOR;
-        tctx.fillRect(0, 0, WORLD_W, WORLD_H);
+        tctx.fillStyle = getBgColor();
+        tctx.fillRect(0, 0, worldWRef.current, worldHRef.current);
         const ls = layersRef.current;
         if (ls) {
           for (const l of ls) {
@@ -709,7 +914,12 @@ export function useCanvas({
         tctx.globalAlpha = 1;
         const px = Math.floor(wx),
           py = Math.floor(wy);
-        if (px >= 0 && px < WORLD_W && py >= 0 && py < WORLD_H) {
+        if (
+          px >= 0 &&
+          px < worldWRef.current &&
+          py >= 0 &&
+          py < worldHRef.current
+        ) {
           const d = tctx.getImageData(px, py, 1, 1).data;
           onColorPicked?.(rgbToHex(d[0], d[1], d[2]));
         }
@@ -737,6 +947,7 @@ export function useCanvas({
       isDrawingRef.current = true;
       currentPtsRef.current = [{ x: wx, y: wy }];
       smoothBufRef.current = [{ x: wx, y: wy }];
+      stabilizerAnchorRef.current = null;
       prevPtRef.current = { x: wx, y: wy };
       lastTimeRef.current = performance.now();
       lastDistRef.current = 0;
@@ -745,8 +956,11 @@ export function useCanvas({
     },
     [
       screenToWorld,
+      hitTestImage,
       pushUndo,
       getActiveLayerId,
+      isBackgroundLayer,
+      getBgColor,
       clearOverlay,
       scheduleRedraw,
       onColorPicked,
@@ -773,26 +987,51 @@ export function useCanvas({
           wy = (newMid.y - offsetY) / scale;
         const panDx = newMid.x - lastPinchMidRef.current.x,
           panDy = newMid.y - lastPinchMidRef.current.y;
-        transformRef.current = {
+        updateTransform({
           scale: ns,
           offsetX: newMid.x - wx * ns + panDx * 0.3,
           offsetY: newMid.y - wy * ns + panDy * 0.3,
-        };
-        setZoom(ns);
+        });
         lastPinchDistRef.current = newDist;
         lastPinchMidRef.current = newMid;
         scheduleRedraw();
         return;
       }
 
+      // Moving imported image with middle mouse
+      if (isMovingImageRef.current && movingImageRef.current) {
+        const { x: wx, y: wy } = screenToWorld(nx, ny);
+        movingImageRef.current.x = wx - imageMoveStartRef.current.x;
+        movingImageRef.current.y = wy - imageMoveStartRef.current.y;
+        scheduleRedraw();
+        return;
+      }
+
+      // Panning with middle mouse / space+drag
+      if (isPanningRef.current) {
+        const dx = e.clientX - panStartRef.current.x;
+        const dy = e.clientY - panStartRef.current.y;
+        updateTransform({
+          ...transformRef.current,
+          offsetX: transformRef.current.offsetX + dx,
+          offsetY: transformRef.current.offsetY + dy,
+        });
+        panStartRef.current = { x: e.clientX, y: e.clientY };
+        scheduleRedraw();
+        return;
+      }
+
+      if (spaceHeldRef.current) return;
+
       if (!isDrawingRef.current) return;
+      pointerPressureRef.current = e.pressure || 0.5;
       const { x: wx, y: wy } = screenToWorld(nx, ny);
       const t = toolRef.current;
 
       if (t === "shape" && shapeStartRef.current) {
         const ov = overlayRef.current?.getContext("2d");
         if (ov) {
-          ov.clearRect(0, 0, WORLD_W, WORLD_H);
+          ov.clearRect(0, 0, worldWRef.current, worldHRef.current);
           drawShapeOnCtx(
             ov,
             shapeTypeRef.current,
@@ -813,7 +1052,7 @@ export function useCanvas({
         lassoRef.current.push({ x: wx, y: wy });
         const ov = overlayRef.current?.getContext("2d");
         if (ov) {
-          ov.clearRect(0, 0, WORLD_W, WORLD_H);
+          ov.clearRect(0, 0, worldWRef.current, worldHRef.current);
           ov.save();
           ov.strokeStyle = "rgba(140,185,224,0.8)";
           ov.lineWidth = 1.5;
@@ -829,29 +1068,43 @@ export function useCanvas({
         return;
       }
 
-      const rawPt = { x: wx, y: wy };
+      const rawPt = { x: wx, y: wy, pressure: e.pressure || 0.5 };
       const pt = getSmoothedPt(rawPt);
       const prev = prevPtRef.current;
+      const minDist = Math.max(0.1, strokeWidthRef.current * 0.05);
+      if (
+        prev &&
+        Math.abs(pt.x - prev.x) < minDist &&
+        Math.abs(pt.y - prev.y) < minDist
+      ) {
+        return;
+      }
       if (prev) lastDistRef.current += Math.hypot(pt.x - prev.x, pt.y - prev.y);
-      const w = getPressureWidth(strokeWidthRef.current);
+      const w = getPressureWidth(strokeWidthRef.current, pt.pressure);
 
       if (t === "smudge") {
         const lc = layerCanvasesRef.current[getActiveLayerId()];
         if (lc && prev) {
           const lctx = lc.getContext("2d");
-          const r = Math.ceil(strokeWidthRef.current * 1.5);
+          const r = Math.ceil(strokeWidthRef.current * 2);
           const x0 = Math.max(0, Math.floor(prev.x - r)),
             y0 = Math.max(0, Math.floor(prev.y - r));
-          const pw = Math.min(r * 2, WORLD_W - x0),
-            ph = Math.min(r * 2, WORLD_H - y0);
+          const pw = Math.min(r * 2, worldWRef.current - x0),
+            ph = Math.min(r * 2, worldHRef.current - y0);
           if (pw > 0 && ph > 0) {
             const patch = lctx.getImageData(x0, y0, pw, ph);
             const tmp = document.createElement("canvas");
             tmp.width = pw;
             tmp.height = ph;
-            tmp.getContext("2d").putImageData(patch, 0, 0);
+            const tc = tmp.getContext("2d");
+            tc.imageSmoothingEnabled = true;
+            tc.imageSmoothingQuality = "high";
+            tc.putImageData(patch, 0, 0);
             lctx.save();
-            lctx.globalAlpha = 0.35;
+            lctx.imageSmoothingEnabled = true;
+            lctx.imageSmoothingQuality = "high";
+            lctx.globalAlpha = 0.3;
+            lctx.filter = "blur(0.5px)";
             lctx.drawImage(tmp, Math.floor(pt.x - r), Math.floor(pt.y - r));
             lctx.restore();
           }
@@ -868,8 +1121,8 @@ export function useCanvas({
           const r = Math.ceil(strokeWidthRef.current * 1.5);
           const x0 = Math.max(0, Math.floor(pt.x - r)),
             y0 = Math.max(0, Math.floor(pt.y - r));
-          const rw = Math.min(r * 2, WORLD_W - x0),
-            rh = Math.min(r * 2, WORLD_H - y0);
+          const rw = Math.min(r * 2, worldWRef.current - x0),
+            rh = Math.min(r * 2, worldHRef.current - y0);
           if (rw > 0 && rh > 0) {
             const patch = lctx.getImageData(x0, y0, rw, rh);
             const d = patch.data,
@@ -912,34 +1165,46 @@ export function useCanvas({
       currentPtsRef.current.push(pt);
       const ov = overlayRef.current?.getContext("2d");
       if (ov) {
-        ov.clearRect(0, 0, WORLD_W, WORLD_H);
+        ov.clearRect(0, 0, worldWRef.current, worldHRef.current);
         const opts = {
           color: colorRef.current,
           width: w,
           opacity: brushOpacityRef.current,
           erase: t === "eraser",
+          eraseToBg: t === "eraser" && isBackgroundLayer(),
           brushType: brushTypeRef.current,
         };
-        drawPathToCtx(ov, currentPtsRef.current, opts);
+        if (t === "eraser") {
+          // Draw directly to layer for real-time eraser feedback
+          const lctx = getActiveCtx();
+          if (lctx && currentPtsRef.current.length >= 2) {
+            drawPathToCtx(lctx, currentPtsRef.current.slice(-2), opts);
+          }
+        } else {
+          drawPathToCtx(ov, currentPtsRef.current, opts);
+        }
         const sm = symmetryModeRef.current;
         if (sm && !opts.erase) {
           const mpts = currentPtsRef.current;
           if (sm === "h" || sm === "both")
             drawPathToCtx(
               ov,
-              mpts.map((p) => ({ x: WORLD_W - p.x, y: p.y })),
+              mpts.map((p) => ({ x: worldWRef.current - p.x, y: p.y })),
               opts,
             );
           if (sm === "v" || sm === "both")
             drawPathToCtx(
               ov,
-              mpts.map((p) => ({ x: p.x, y: WORLD_H - p.y })),
+              mpts.map((p) => ({ x: p.x, y: worldHRef.current - p.y })),
               opts,
             );
           if (sm === "both")
             drawPathToCtx(
               ov,
-              mpts.map((p) => ({ x: WORLD_W - p.x, y: WORLD_H - p.y })),
+              mpts.map((p) => ({
+                x: worldWRef.current - p.x,
+                y: worldHRef.current - p.y,
+              })),
               opts,
             );
         }
@@ -949,9 +1214,11 @@ export function useCanvas({
     },
     [
       screenToWorld,
+      updateTransform,
       getSmoothedPt,
       getPressureWidth,
       getActiveLayerId,
+      isBackgroundLayer,
       drawPathToCtx,
       scheduleRedraw,
     ],
@@ -964,6 +1231,19 @@ export function useCanvas({
       const rect = canvasRef.current?.getBoundingClientRect();
       if (e) pointerCacheRef.current.delete(e.pointerId);
       if (pointerCacheRef.current.size < 2) isPinchingRef.current = false;
+      if (isMovingImageRef.current) {
+        isMovingImageRef.current = false;
+        movingImageRef.current = null;
+        if (canvasRef.current)
+          canvasRef.current.style.cursor = spaceHeldRef.current ? "grab" : "";
+        return;
+      }
+      if (isPanningRef.current) {
+        isPanningRef.current = false;
+        if (canvasRef.current)
+          canvasRef.current.style.cursor = spaceHeldRef.current ? "grab" : "";
+        return;
+      }
       if (pointerCacheRef.current.size === 1) return;
       if (!isDrawingRef.current) {
         isDrawingRef.current = false;
@@ -1010,7 +1290,7 @@ export function useCanvas({
           setSelectionState({ active: true, bounds });
           const ov = overlayRef.current?.getContext("2d");
           if (ov) {
-            ov.clearRect(0, 0, WORLD_W, WORLD_H);
+            ov.clearRect(0, 0, worldWRef.current, worldHRef.current);
             ov.save();
             ov.strokeStyle = "#8cb9e0";
             ov.lineWidth = 1.5;
@@ -1036,15 +1316,20 @@ export function useCanvas({
           width: w,
           opacity: brushOpacityRef.current,
           erase: t === "eraser",
+          eraseToBg: t === "eraser" && isBackgroundLayer(),
           brushType: brushTypeRef.current,
         };
-        commitStroke(pts, opts);
+        // Eraser was already drawn to layer in real-time; skip commitStroke
+        if (t !== "eraser") {
+          commitStroke(pts, opts);
+        }
         const path = { points: pts, ...opts };
         pathHistoryRef.current.push(path);
         if (isConnected && broadcastStroke) broadcastStroke({ path });
       }
       currentPtsRef.current = [];
       smoothBufRef.current = [];
+      stabilizerAnchorRef.current = null;
       scheduleRedraw();
     },
     [
@@ -1111,16 +1396,21 @@ export function useCanvas({
     const ctx = getActiveCtx();
     if (ctx) {
       ctx.save();
-      ctx.globalCompositeOperation = "destination-out";
       ctx.beginPath();
       ctx.moveTo(pts[0].x, pts[0].y);
       for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
       ctx.closePath();
+      if (isBackgroundLayer()) {
+        ctx.fillStyle = getBgColor();
+        ctx.globalCompositeOperation = "source-over";
+      } else {
+        ctx.globalCompositeOperation = "destination-out";
+      }
       ctx.fill();
       ctx.restore();
     }
     clearSelection();
-  }, [pushUndo, getActiveCtx, clearSelection]);
+  }, [pushUndo, getActiveCtx, clearSelection, isBackgroundLayer, getBgColor]);
 
   // ── Zoom controls ─────────────────────────────────────────────────────────────
   const applyZoom = useCallback(
@@ -1131,15 +1421,14 @@ export function useCanvas({
       const wx = (cx - offsetX) / scale,
         wy = (cy - offsetY) / scale;
       const s = clamp(ns, MIN_SCALE, MAX_SCALE);
-      transformRef.current = {
+      updateTransform({
         scale: s,
         offsetX: cx - wx * s,
         offsetY: cy - wy * s,
-      };
-      setZoom(s);
+      });
       scheduleRedraw();
     },
-    [scheduleRedraw],
+    [scheduleRedraw, updateTransform],
   );
 
   const zoomIn = useCallback(
@@ -1153,26 +1442,26 @@ export function useCanvas({
   const resetZoom = useCallback(() => {
     const c = canvasRef.current;
     if (!c) return;
-    transformRef.current = {
+    updateTransform({
       scale: 1,
-      offsetX: (c.width - WORLD_W) / 2,
-      offsetY: (c.height - WORLD_H) / 2,
-    };
-    setZoom(1);
+      offsetX: (c.width - worldWRef.current) / 2,
+      offsetY: (c.height - worldHRef.current) / 2,
+    });
     scheduleRedraw();
-  }, [scheduleRedraw]);
+  }, [scheduleRedraw, updateTransform]);
   const fitToScreen = useCallback(() => {
     const c = canvasRef.current;
     if (!c) return;
-    const s = Math.min(c.width / WORLD_W, c.height / WORLD_H) * 0.92;
-    transformRef.current = {
+    const s =
+      Math.min(c.width / worldWRef.current, c.height / worldHRef.current) *
+      0.92;
+    updateTransform({
       scale: s,
-      offsetX: (c.width - WORLD_W * s) / 2,
-      offsetY: (c.height - WORLD_H * s) / 2,
-    };
-    setZoom(s);
+      offsetX: (c.width - worldWRef.current * s) / 2,
+      offsetY: (c.height - worldHRef.current * s) / 2,
+    });
     scheduleRedraw();
-  }, [scheduleRedraw]);
+  }, [scheduleRedraw, updateTransform]);
 
   // ── Clear ─────────────────────────────────────────────────────────────────────
   const clear = useCallback(() => {
@@ -1183,10 +1472,10 @@ export function useCanvas({
         const lc = layerCanvasesRef.current[l.id];
         if (!lc) continue;
         const lctx = lc.getContext("2d");
-        lctx.clearRect(0, 0, WORLD_W, WORLD_H);
+        lctx.clearRect(0, 0, worldWRef.current, worldHRef.current);
         if (l.id === ls[0]?.id) {
-          lctx.fillStyle = BG_COLOR;
-          lctx.fillRect(0, 0, WORLD_W, WORLD_H);
+          lctx.fillStyle = getBgColor();
+          lctx.fillRect(0, 0, worldWRef.current, worldHRef.current);
         }
       }
     }
@@ -1199,11 +1488,11 @@ export function useCanvas({
   // ── Export ────────────────────────────────────────────────────────────────────
   const exportPng = useCallback(() => {
     const tmp = document.createElement("canvas");
-    tmp.width = WORLD_W;
-    tmp.height = WORLD_H;
+    tmp.width = worldWRef.current;
+    tmp.height = worldHRef.current;
     const tctx = tmp.getContext("2d");
-    tctx.fillStyle = BG_COLOR;
-    tctx.fillRect(0, 0, WORLD_W, WORLD_H);
+    tctx.fillStyle = getBgColor();
+    tctx.fillRect(0, 0, worldWRef.current, worldHRef.current);
     const ls = layersRef.current;
     if (ls) {
       for (const l of ls) {
@@ -1221,15 +1510,29 @@ export function useCanvas({
 
   // ── Import image ──────────────────────────────────────────────────────────────
   const importImage = useCallback(
-    (dataUrl, wx = 0, wy = 0) => {
+    (dataUrl) => {
       pushUndo();
       const img = new Image();
       img.onload = () => {
         const ctx = getActiveCtx();
-        if (ctx) {
-          ctx.drawImage(img, wx, wy);
-          scheduleRedraw();
+        if (!ctx) return;
+        // Scale to fit if larger than 80% of world
+        let w = img.width,
+          h = img.height;
+        const maxW = worldWRef.current * 0.8,
+          maxH = worldHRef.current * 0.8;
+        if (w > maxW || h > maxH) {
+          const s = Math.min(maxW / w, maxH / h);
+          w *= s;
+          h *= s;
         }
+        // Center on current viewport
+        const t = transformRef.current;
+        const canvas = canvasRef.current;
+        const cx = (canvas.width / 2 - t.offsetX) / t.scale;
+        const cy = (canvas.height / 2 - t.offsetY) / t.scale;
+        ctx.drawImage(img, cx - w / 2, cy - h / 2, w, h);
+        scheduleRedraw();
       };
       img.src = dataUrl;
     },
@@ -1244,13 +1547,13 @@ export function useCanvas({
       pushUndo();
       const lctx = lc.getContext("2d");
       const tmp = document.createElement("canvas");
-      tmp.width = WORLD_W;
-      tmp.height = WORLD_H;
+      tmp.width = worldWRef.current;
+      tmp.height = worldHRef.current;
       const tctx = tmp.getContext("2d");
-      tctx.translate(WORLD_W, 0);
+      tctx.translate(worldWRef.current, 0);
       tctx.scale(-1, 1);
       tctx.drawImage(lc, 0, 0);
-      lctx.clearRect(0, 0, WORLD_W, WORLD_H);
+      lctx.clearRect(0, 0, worldWRef.current, worldHRef.current);
       lctx.drawImage(tmp, 0, 0);
       scheduleRedraw();
     },
@@ -1264,13 +1567,13 @@ export function useCanvas({
       pushUndo();
       const lctx = lc.getContext("2d");
       const tmp = document.createElement("canvas");
-      tmp.width = WORLD_W;
-      tmp.height = WORLD_H;
+      tmp.width = worldWRef.current;
+      tmp.height = worldHRef.current;
       const tctx = tmp.getContext("2d");
-      tctx.translate(0, WORLD_H);
+      tctx.translate(0, worldHRef.current);
       tctx.scale(1, -1);
       tctx.drawImage(lc, 0, 0);
-      lctx.clearRect(0, 0, WORLD_W, WORLD_H);
+      lctx.clearRect(0, 0, worldWRef.current, worldHRef.current);
       lctx.drawImage(tmp, 0, 0);
       scheduleRedraw();
     },
@@ -1288,12 +1591,12 @@ export function useCanvas({
       if (!layerId) return;
       const lc = ensureLayerCanvas(layerId);
       const lctx = lc.getContext("2d");
-      lctx.fillStyle = BG_COLOR;
-      lctx.fillRect(0, 0, WORLD_W, WORLD_H);
+      lctx.fillStyle = getBgColor();
+      lctx.fillRect(0, 0, worldWRef.current, worldHRef.current);
       for (const p of paths) drawPathToCtx(lctx, p.points, p);
       scheduleRedraw();
     },
-    [ensureLayerCanvas, drawPathToCtx, scheduleRedraw],
+    [ensureLayerCanvas, drawPathToCtx, scheduleRedraw, getBgColor],
   );
 
   const applyRemoteStroke = useCallback(
@@ -1317,15 +1620,15 @@ export function useCanvas({
       const lc = layerCanvasesRef.current[l.id];
       if (!lc) continue;
       const lctx = lc.getContext("2d");
-      lctx.clearRect(0, 0, WORLD_W, WORLD_H);
+      lctx.clearRect(0, 0, worldWRef.current, worldHRef.current);
       if (l.id === ls[0]?.id) {
-        lctx.fillStyle = BG_COLOR;
-        lctx.fillRect(0, 0, WORLD_W, WORLD_H);
+        lctx.fillStyle = getBgColor();
+        lctx.fillRect(0, 0, worldWRef.current, worldHRef.current);
       }
     }
     pathHistoryRef.current = [];
     scheduleRedraw();
-  }, [scheduleRedraw]);
+  }, [scheduleRedraw, getBgColor]);
 
   const applyRemoteUndo = useCallback(() => {
     const idx = [...pathHistoryRef.current]
@@ -1335,6 +1638,33 @@ export function useCanvas({
     pathHistoryRef.current.splice(pathHistoryRef.current.length - 1 - idx, 1);
     loadPaths(pathHistoryRef.current);
   }, [loadPaths]);
+
+  // ── Resize world ──────────────────────────────────────────────────────────────
+  const resizeWorld = useCallback(
+    (newW, newH) => {
+      worldWRef.current = newW;
+      worldHRef.current = newH;
+      // Resize all layer canvases, preserving content
+      for (const [id, lc] of Object.entries(layerCanvasesRef.current)) {
+        const tmp = document.createElement("canvas");
+        tmp.width = lc.width;
+        tmp.height = lc.height;
+        tmp.getContext("2d").drawImage(lc, 0, 0);
+        lc.width = newW;
+        lc.height = newH;
+        lc.getContext("2d").drawImage(tmp, 0, 0);
+      }
+      // Resize overlay
+      if (overlayRef.current) {
+        overlayRef.current.width = newW;
+        overlayRef.current.height = newH;
+      }
+      undoStackRef.current = [];
+      redoStackRef.current = [];
+      scheduleRedraw();
+    },
+    [scheduleRedraw],
+  );
 
   return {
     canvasRef,
@@ -1351,7 +1681,6 @@ export function useCanvas({
     loadPaths,
     applyRemoteStroke,
     applyRemoteClear,
-    applyRemoteUndo,
     zoom,
     zoomIn,
     zoomOut,
@@ -1371,5 +1700,6 @@ export function useCanvas({
     deleteSelection,
     importImage,
     scheduleRedraw,
+    resizeWorld,
   };
 }

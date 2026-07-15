@@ -69,6 +69,10 @@ export default function HomePage() {
   // ── UI state ──────────────────────────────────────────────────────────────────
   const [roomDialogOpen, setRoomDialogOpen] = useState(false);
   const [historyDialogOpen, setHistoryDialogOpen] = useState(false);
+  const [canvasSizeDialogOpen, setCanvasSizeDialogOpen] = useState(false);
+  const [worldW, setWorldW] = useState(1920);
+  const [worldH, setWorldH] = useState(1080);
+  const [worldBgColor, setWorldBgColor] = useState("#0d1020");
   const [toast, setToast] = useState(null);
 
   const router = useRouter();
@@ -88,10 +92,8 @@ export default function HomePage() {
     leaveRoom,
     broadcastStroke,
     broadcastClear,
-    broadcastUndo,
     onStrokeReceived,
     onClearReceived,
-    onUndoReceived,
   } = useRoom(userId, userName);
 
   const {
@@ -118,7 +120,6 @@ export default function HomePage() {
     loadPaths,
     applyRemoteStroke,
     applyRemoteClear,
-    applyRemoteUndo,
     zoom,
     zoomIn,
     zoomOut,
@@ -138,6 +139,7 @@ export default function HomePage() {
     deleteSelection,
     importImage,
     scheduleRedraw,
+    resizeWorld,
   } = useCanvas({
     tool,
     color,
@@ -149,12 +151,12 @@ export default function HomePage() {
     fillTolerance,
     symmetryMode,
     simulatePressure,
+    worldBgColor,
     layers,
     activeLayerIndex,
     isConnected,
     broadcastStroke,
     broadcastClear,
-    broadcastUndo,
     onColorPicked: (c) => {
       setColor(c);
       setTool("pen");
@@ -163,6 +165,8 @@ export default function HomePage() {
     textSize,
     textBold,
     textItalic,
+    worldW,
+    worldH,
   });
 
   const canvasCallbackRef = useCallback(
@@ -175,12 +179,10 @@ export default function HomePage() {
     [initCanvas],
   );
 
-  // ── Remote events ─────────────────────────────────────────────────────────────
   useEffect(() => {
     onStrokeReceived(({ path }) => path && applyRemoteStroke(path));
     onClearReceived(() => applyRemoteClear());
-    onUndoReceived(() => applyRemoteUndo());
-  }, [onStrokeReceived, onClearReceived, onUndoReceived]);
+  }, [onStrokeReceived, onClearReceived]);
 
   // ── Keyboard shortcuts ────────────────────────────────────────────────────────
   useEffect(() => {
@@ -301,8 +303,16 @@ export default function HomePage() {
   };
 
   const handleImportImage = (dataUrl) => {
-    importImage(dataUrl, 0, 0);
+    importImage(dataUrl);
     showToast("Image imported!");
+  };
+
+  const handleCanvasResize = (w, h) => {
+    setWorldW(w);
+    setWorldH(h);
+    resizeWorld(w, h);
+    setCanvasSizeDialogOpen(false);
+    showToast(`Canvas: ${w}×${h}`);
   };
 
   // ── Layer operations ──────────────────────────────────────────────────────────
@@ -652,6 +662,7 @@ export default function HomePage() {
         isInRoom={isConnected}
         roomCode={roomCode}
         userAvatar={isSignedIn ? <UserButton /> : null}
+        onCanvasSizeOpen={() => setCanvasSizeDialogOpen(true)}
       />
 
       {/* ── Dialogs ── */}
@@ -678,6 +689,89 @@ export default function HomePage() {
       />
 
       {toast && <div className="toast">{toast}</div>}
+
+      {/* ── Canvas Size Dialog ── */}
+      {canvasSizeDialogOpen && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/50 backdrop-blur-sm">
+          <div className="bg-[#141832] border border-[#8cb9e0]/15 rounded-2xl p-6 w-80 shadow-2xl">
+            <h3 className="text-[#c7d8ec] text-lg font-semibold mb-4">
+              Canvas Settings
+            </h3>
+            <div className="mb-4">
+              <label className="block text-[#c7d8ec]/70 text-xs font-semibold mb-2 uppercase tracking-wider">
+                Background Color
+              </label>
+              <div className="flex items-center gap-2">
+                <input
+                  type="color"
+                  value={worldBgColor}
+                  onChange={(e) => setWorldBgColor(e.target.value)}
+                  className="w-8 h-8 rounded cursor-pointer border-none p-0 bg-transparent"
+                />
+                <span className="text-[#c7d8ec] font-mono text-sm">
+                  {worldBgColor.toUpperCase()}
+                </span>
+              </div>
+            </div>
+            <label className="block text-[#c7d8ec]/70 text-xs font-semibold mb-2 uppercase tracking-wider">
+              Canvas Size
+            </label>
+            <div className="grid grid-cols-2 gap-2 mb-4">
+              {[
+                [1920, 1080, "1920×1080"],
+                [2560, 1440, "2560×1440"],
+                [3840, 2160, "4K"],
+                [1080, 1080, "Square"],
+                [1080, 1920, "Portrait"],
+                [4096, 4096, "4096²"],
+              ].map(([w, h, label]) => (
+                <button
+                  key={label}
+                  onClick={() => handleCanvasResize(w, h)}
+                  className={`px-3 py-2.5 rounded-xl text-sm transition-all ${
+                    worldW === w && worldH === h
+                      ? "bg-[#8cb9e0]/20 text-[#8cb9e0] border border-[#8cb9e0]/30"
+                      : "text-[#c7d8ec]/70 hover:bg-[#8cb9e0]/10 border border-transparent"
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <div className="flex items-center gap-2 mb-4">
+              <input
+                type="number"
+                value={worldW}
+                onChange={(e) => setWorldW(Number(e.target.value))}
+                className="w-full bg-[#0d1020] border border-[#8cb9e0]/15 rounded-lg px-3 py-2 text-sm text-[#c7d8ec] outline-none focus:border-[#8cb9e0]/40"
+                placeholder="Width"
+              />
+              <span className="text-[#8cb9e0]/40">×</span>
+              <input
+                type="number"
+                value={worldH}
+                onChange={(e) => setWorldH(Number(e.target.value))}
+                className="w-full bg-[#0d1020] border border-[#8cb9e0]/15 rounded-lg px-3 py-2 text-sm text-[#c7d8ec] outline-none focus:border-[#8cb9e0]/40"
+                placeholder="Height"
+              />
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setCanvasSizeDialogOpen(false)}
+                className="flex-1 px-4 py-2 rounded-xl text-sm text-[#c7d8ec]/60 hover:bg-[#8cb9e0]/10 transition-all"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => handleCanvasResize(worldW, worldH)}
+                className="flex-1 px-4 py-2 rounded-xl text-sm bg-[#8cb9e0]/15 text-[#8cb9e0] hover:bg-[#8cb9e0]/25 transition-all font-medium"
+              >
+                Apply
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 }

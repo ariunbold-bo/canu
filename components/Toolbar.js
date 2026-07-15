@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef } from "react";
+import { useRef, useState } from "react";
 import {
   Tooltip,
   TooltipContent,
@@ -47,6 +47,9 @@ import {
   Droplets,
   Blend,
   FlipHorizontal2,
+  Menu,
+  Gamepad2,
+  Maximize2,
 } from "lucide-react";
 import { HexColorPicker, HexColorInput } from "react-colorful";
 
@@ -183,9 +186,11 @@ export default function Toolbar({
   isInRoom,
   roomCode,
   userAvatar,
+  // Canvas size
+  onCanvasSizeOpen,
 }) {
   const importRef = useRef(null);
-  const dotSize = Math.max(6, Math.min(strokeWidth || 4, 18));
+  const [activePopover, setActivePopover] = useState(null);
 
   const handleImport = (e) => {
     const file = e.target.files?.[0];
@@ -377,18 +382,6 @@ export default function Toolbar({
 
   const renderSecondaryTools = (inPopover = false) => (
     <>
-      {isSignedIn && (
-        <>
-          <ToolBtn
-            tooltip={isInRoom ? `Room: ${roomCode}` : "Create / Join room"}
-            active={isInRoom}
-            onClick={onRoomOpen}
-          >
-            <Users size={17} />
-          </ToolBtn>
-          {!inPopover && <div className="toolbar-divider" />}
-        </>
-      )}
       <ToolBtn tooltip="Download image" onClick={onDownload}>
         <Download size={17} />
       </ToolBtn>
@@ -402,19 +395,71 @@ export default function Toolbar({
           </ToolBtn>
         </>
       )}
-      {!isSignedIn && (
-        <>
-          {!inPopover && <div className="toolbar-divider" />}
-          <ToolBtn tooltip="Sign up" onClick={onSignUp}>
-            <LogIn size={17} />
-          </ToolBtn>
-        </>
-      )}
     </>
   );
 
   return (
     <div className="floating-toolbar">
+      {/* ── Main Menu ── */}
+      <Popover>
+        <PopoverTrigger className={cn(triggerCls)}>
+          <Menu size={17} />
+        </PopoverTrigger>
+        <PopoverContent
+          side="top"
+          sideOffset={14}
+          className="bg-[#141832]/95 backdrop-blur-xl border border-[#8cb9e0]/15 w-56 p-2 rounded-2xl shadow-2xl z-[150]"
+        >
+          <div className="flex flex-col gap-0.5">
+            <p className="text-[10px] uppercase tracking-wider text-[#8cb9e0]/40 px-3 pt-1 pb-1.5 font-medium">Menu</p>
+            {isSignedIn && (
+              <button
+                onClick={onRoomOpen}
+                className={cn(
+                  "flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm transition-all",
+                  isInRoom
+                    ? "bg-[#8cb9e0]/15 text-[#8cb9e0]"
+                    : "text-[#c7d8ec]/80 hover:bg-[#8cb9e0]/10 hover:text-[#c7d8ec]"
+                )}
+              >
+                <Users size={16} />
+                <span>{isInRoom ? `Room: ${roomCode}` : "Rooms"}</span>
+                {isInRoom && <span className="ml-auto w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />}
+              </button>
+            )}
+            <button
+              className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm text-[#c7d8ec]/80 hover:bg-[#8cb9e0]/10 hover:text-[#c7d8ec] transition-all"
+              disabled
+            >
+              <Gamepad2 size={16} />
+              <span>Games</span>
+              <span className="ml-auto text-[10px] text-[#8cb9e0]/40 font-medium">Soon</span>
+            </button>
+            <button
+              onClick={onCanvasSizeOpen}
+              className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm text-[#c7d8ec]/80 hover:bg-[#8cb9e0]/10 hover:text-[#c7d8ec] transition-all"
+            >
+              <Maximize2 size={16} />
+              <span>Canvas Size</span>
+            </button>
+            {!isSignedIn && (
+              <>
+                <div className="h-px bg-[#8cb9e0]/10 my-1" />
+                <button
+                  onClick={onSignUp}
+                  className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm text-[#8cb9e0] hover:bg-[#8cb9e0]/15 transition-all font-medium"
+                >
+                  <LogIn size={16} />
+                  <span>Sign In</span>
+                </button>
+              </>
+            )}
+          </div>
+        </PopoverContent>
+      </Popover>
+
+      <div className="toolbar-divider" />
+
       {/* ── Color swatch ── */}
       <Dialog>
         <DialogTrigger className="flex shrink-0 items-center justify-center w-9 h-10 rounded-lg hover:bg-[#8cb9e0]/10 transition-all active:scale-95">
@@ -485,20 +530,80 @@ export default function Toolbar({
       <div className="toolbar-divider" />
 
       {/* ── Drawing tools ── */}
-      <ToolBtn
-        tooltip="Pen"
-        active={tool === "pen"}
-        onClick={() => onToolChange("pen")}
+      <Popover
+        open={activePopover === "pen"}
+        onOpenChange={(open) => {
+          if (open && tool !== "pen") return;
+          setActivePopover(open ? "pen" : null);
+        }}
       >
-        <Pen size={17} />
-      </ToolBtn>
-      <ToolBtn
-        tooltip="Eraser"
-        active={tool === "eraser"}
-        onClick={() => onToolChange("eraser")}
+        <PopoverTrigger
+          onClick={() => {
+            if (tool !== "pen") onToolChange("pen");
+          }}
+          className={cn(
+            triggerCls,
+            tool === "pen" &&
+              "bg-[#8cb9e0]/15 text-[#8cb9e0] shadow-[0_0_12px_rgba(140,185,224,0.2)]",
+          )}
+        >
+          <Pen size={17} />
+        </PopoverTrigger>
+        <PopoverContent
+          side="top"
+          sideOffset={14}
+          className="bg-[#141832]/95 backdrop-blur-xl border border-[#8cb9e0]/15 w-auto p-3 rounded-2xl shadow-2xl z-[150]"
+        >
+          {brushSettings}
+        </PopoverContent>
+      </Popover>
+      <Popover
+        open={activePopover === "eraser"}
+        onOpenChange={(open) => {
+          if (open && tool !== "eraser") return;
+          setActivePopover(open ? "eraser" : null);
+        }}
       >
-        <Eraser size={17} />
-      </ToolBtn>
+        <PopoverTrigger
+          onClick={() => {
+            if (tool !== "eraser") onToolChange("eraser");
+          }}
+          className={cn(
+            triggerCls,
+            tool === "eraser" &&
+              "bg-[#8cb9e0]/15 text-[#8cb9e0] shadow-[0_0_12px_rgba(140,185,224,0.2)]",
+          )}
+        >
+          <Eraser size={17} />
+        </PopoverTrigger>
+        <PopoverContent
+          side="top"
+          sideOffset={14}
+          className="bg-[#141832]/95 backdrop-blur-xl border border-[#8cb9e0]/15 w-auto p-3 rounded-2xl shadow-2xl z-[150]"
+        >
+          <div className="flex flex-col gap-3 p-1 min-w-[220px]">
+            <div className="text-[11px] text-[#8cb9e0]/50 font-semibold uppercase tracking-wider">
+              Eraser Settings
+            </div>
+            <SliderRow
+              label="Size"
+              value={strokeWidth}
+              min={1}
+              max={200}
+              onChange={onStrokeWidthChange}
+              unit="px"
+            />
+            <SliderRow
+              label="Opacity"
+              value={Math.round(brushOpacity * 100)}
+              min={0}
+              max={100}
+              onChange={(v) => onBrushOpacityChange(v / 100)}
+              unit="%"
+            />
+          </div>
+        </PopoverContent>
+      </Popover>
       <ToolBtn
         tooltip="Eyedropper"
         active={tool === "eyedropper"}
@@ -536,8 +641,17 @@ export default function Toolbar({
       </ToolBtn>
 
       {/* Shape tool with popover */}
-      <Popover>
+      <Popover
+        open={activePopover === "shape"}
+        onOpenChange={(open) => {
+          if (open && tool !== "shape") return;
+          setActivePopover(open ? "shape" : null);
+        }}
+      >
         <PopoverTrigger
+          onClick={() => {
+            if (tool !== "shape") onToolChange("shape");
+          }}
           className={cn(
             triggerCls,
             tool === "shape" &&
@@ -576,24 +690,7 @@ export default function Toolbar({
         </PopoverContent>
       </Popover>
 
-      <div className="toolbar-divider" />
 
-      {/* ── Brush settings ── */}
-      <Popover>
-        <PopoverTrigger className={cn(triggerCls)}>
-          <span
-            className="block rounded-full bg-[#8cb9e0] transition-all"
-            style={{ width: dotSize, height: dotSize }}
-          />
-        </PopoverTrigger>
-        <PopoverContent
-          side="top"
-          sideOffset={14}
-          className="bg-[#141832]/95 backdrop-blur-xl border border-[#8cb9e0]/15 w-auto p-3 rounded-2xl shadow-2xl z-[150]"
-        >
-          {brushSettings}
-        </PopoverContent>
-      </Popover>
 
       {/* ── History ── */}
       <ToolBtn tooltip="Undo  Ctrl+Z" onClick={onUndo}>

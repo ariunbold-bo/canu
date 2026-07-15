@@ -1,0 +1,8 @@
+pen sharp turns (big ones only smaller ones work unless you zoom in like a lot) make drawings sharp edged
+canvas color changing doesnt work
+tf is pencil simulation it doesnt work either way youd need a ton of techs from across the internet
+tf is wrong with erasor it just fucking paints it with canvas color?? well when i bucket everything(changing canvas color) it should become canvas that color dont forget lasso
+how tf am i supposed to move the damn written text 
+small sized drawings is way far off from the cursor
+using mouse 2 to move around the canvas same goes for picture moving
+when click space to hover around it just clicks the last used button to trigger the action
