@@ -37,38 +37,60 @@ function floodFill(imageData, sx, sy, fillRgb, tolerance) {
   const { data, width, height } = imageData;
   sx = Math.floor(sx);
   sy = Math.floor(sy);
+  
   if (sx < 0 || sx >= width || sy < 0 || sy >= height) return;
+  
   const si = (sy * width + sx) * 4;
   const [tr, tg, tb, ta] = [data[si], data[si + 1], data[si + 2], data[si + 3]];
   const [fr, fg, fb] = fillRgb;
+  
   if (tr === fr && tg === fg && tb === fb && ta === 255) return;
+  
   const maxDist = tolerance * 10.2;
-  const visited = new Uint8ClampedArray(width * height);
-  const stack = [sx + sy * width];
-  while (stack.length) {
+  const visited = new Uint8Array(width * height);
+  
+  const startIdx = sx + sy * width;
+  const stack = [startIdx];
+  visited[startIdx] = 1;
+
+  while (stack.length > 0) {
     const idx = stack.pop();
-    if (visited[idx]) continue;
-    visited[idx] = 1;
-    const x = idx % width,
-      y = (idx / width) | 0;
     const pi = idx * 4;
+
     if (
       Math.abs(data[pi] - tr) +
-        Math.abs(data[pi + 1] - tg) +
-        Math.abs(data[pi + 2] - tb) +
-        Math.abs(data[pi + 3] - ta) >
-      maxDist
-    )
-      continue;
+      Math.abs(data[pi + 1] - tg) +
+      Math.abs(data[pi + 2] - tb) +
+      Math.abs(data[pi + 3] - ta) > maxDist
+    ) continue;
+
     data[pi] = fr;
     data[pi + 1] = fg;
     data[pi + 2] = fb;
     data[pi + 3] = 255;
-    if (x > 0) stack.push(idx - 1);
-    if (x < width - 1) stack.push(idx + 1);
-    if (y > 0) stack.push(idx - width);
-    if (y < height - 1) stack.push(idx + width);
+
+    const x = idx % width;
+    const y = (idx / width) | 0;
+
+    if (x > 0 && visited[idx - 1] === 0) {
+      visited[idx - 1] = 1;
+      stack.push(idx - 1);
+    }
+    if (x < width - 1 && visited[idx + 1] === 0) {
+      visited[idx + 1] = 1;
+      stack.push(idx + 1);
+    }
+    if (y > 0 && visited[idx - width] === 0) {
+      visited[idx - width] = 1;
+      stack.push(idx - width);
+    }
+    if (y < height - 1 && visited[idx + width] === 0) {
+      visited[idx + width] = 1;
+      stack.push(idx + width);
+    }
   }
+
+  return visited;
 }
 
 let scratchCanvas = null;
@@ -93,7 +115,7 @@ function angleBetween(a, b, c) {
   );
 }
 
-// Smooth path — uses line segments on sharp turns, curves on gentle arcs
+// Smooth path — quadratic curve interpolation + circle stamps at sharp turns
 function renderSmoothPath(ctx, pts, strokeStyle, lineWidth, alpha, comp) {
   if (!pts || pts.length < 2) return;
 
@@ -111,23 +133,26 @@ function renderSmoothPath(ctx, pts, strokeStyle, lineWidth, alpha, comp) {
   if (pts.length === 2) {
     sctx.lineTo(pts[1].x, pts[1].y);
   } else {
+    sctx.lineTo((pts[0].x + pts[1].x) / 2, (pts[0].y + pts[1].y) / 2);
     for (let i = 1; i < pts.length - 1; i++) {
-      const prev = pts[i - 1],
-        curr = pts[i],
-        next = pts[i + 1];
-      const ang = angleBetween(prev, curr, next);
-      // Sharp turns (> ~55°) get straight segments to avoid corner bulging
-      if (ang > 0.95) {
-        sctx.lineTo(curr.x, curr.y);
-      } else {
-        const mx = (curr.x + next.x) / 2,
-          my = (curr.y + next.y) / 2;
-        sctx.quadraticCurveTo(curr.x, curr.y, mx, my);
-      }
+      const curr = pts[i], next = pts[i + 1];
+      const mx = (curr.x + next.x) / 2, my = (curr.y + next.y) / 2;
+      sctx.quadraticCurveTo(curr.x, curr.y, mx, my);
     }
     sctx.lineTo(pts[pts.length - 1].x, pts[pts.length - 1].y);
   }
   sctx.stroke();
+
+  // Stamp filled circles at sharp turns to guarantee round corners
+  sctx.fillStyle = strokeStyle;
+  for (let i = 1; i < pts.length - 1; i++) {
+    const ang = angleBetween(pts[i - 1], pts[i], pts[i + 1]);
+    if (ang > 0.6) {
+      sctx.beginPath();
+      sctx.arc(pts[i].x, pts[i].y, lineWidth / 2, 0, Math.PI * 2);
+      sctx.fill();
+    }
+  }
 
   ctx.save();
   ctx.globalCompositeOperation = comp || "source-over";
@@ -273,6 +298,10 @@ export function useCanvas({
   const movingImageRef = useRef(null);
   const imageMoveStartRef = useRef({ x: 0, y: 0 });
   const imageObjectsRef = useRef([]);
+  const textObjectsRef = useRef([]);
+  const isMovingTextRef = useRef(false);
+  const movingTextRef = useRef(null);
+  const textMoveStartRef = useRef({ x: 0, y: 0 });
   const panStartRef = useRef({ x: 0, y: 0 });
   const spaceHeldRef = useRef(false);
   const lastPinchDistRef = useRef(0);
@@ -391,9 +420,12 @@ export function useCanvas({
       if (
         e.code === "Space" &&
         !e.repeat &&
-        !e.target.closest("input, textarea, select, button")
+        !e.target.closest("input, textarea, select")
       ) {
         e.preventDefault();
+        if (document.activeElement instanceof HTMLElement) {
+          document.activeElement.blur();
+        }
         spaceHeldRef.current = true;
         if (canvasRef.current) canvasRef.current.style.cursor = "grab";
       }
@@ -484,6 +516,17 @@ export function useCanvas({
       ctx.drawImage(imgObj.img, imgObj.x, imgObj.y, imgObj.w, imgObj.h);
     }
 
+    // Text objects (movable, right-click to drag)
+    for (const tObj of textObjectsRef.current) {
+      ctx.save();
+      const style = `${tObj.italic ? "italic " : ""}${tObj.bold ? "bold " : ""}${tObj.size}px ${tObj.font}`;
+      ctx.font = style;
+      ctx.fillStyle = tObj.color;
+      ctx.globalAlpha = tObj.opacity;
+      ctx.fillText(tObj.value, tObj.x, tObj.y + tObj.size);
+      ctx.restore();
+    }
+
     const sm = symmetryModeRef.current;
     if (sm) {
       ctx.save();
@@ -521,6 +564,10 @@ export function useCanvas({
     }
   }, [composite]);
 
+  useEffect(() => {
+    scheduleRedraw();
+  }, [worldBgColor, scheduleRedraw]);
+
   // ── Init ──────────────────────────────────────────────────────────────────────
   const initCanvas = useCallback(
     (el) => {
@@ -551,8 +598,7 @@ export function useCanvas({
           if (i === 0) {
             const lc = layerCanvasesRef.current[l.id];
             const lctx = lc.getContext("2d");
-            lctx.fillStyle = getBgColor();
-            lctx.fillRect(0, 0, worldWRef.current, worldHRef.current);
+            lctx.clearRect(0, 0, worldWRef.current, worldHRef.current);
           }
         });
       }
@@ -596,6 +642,16 @@ export function useCanvas({
         wy <= img.y + img.h
       )
         return img;
+    }
+    return null;
+  }, []);
+
+  const hitTestText = useCallback((wx, wy) => {
+    const texts = textObjectsRef.current;
+    for (let i = texts.length - 1; i >= 0; i--) {
+      const t = texts[i];
+      if (wx >= t.x && wx <= t.x + t.w && wy >= t.y && wy <= t.y + t.h)
+        return t;
     }
     return null;
   }, []);
@@ -661,8 +717,7 @@ export function useCanvas({
 
   const drawPathToCtx = useCallback(
     (ctx, pts, opts) => {
-      const { color: c, width: w, opacity: op, erase, brushType: bt, eraseToBg } =
-        opts;
+      const { color: c, width: w, opacity: op, erase, brushType: bt } = opts;
       if (!ctx || !pts || pts.length < 2) return;
       if (bt === "airbrush" && !erase) {
         renderAirbrush(ctx, pts, c, w * 2, op);
@@ -673,13 +728,8 @@ export function useCanvas({
         comp = "source-over",
         ss = c;
       if (erase) {
-        if (eraseToBg) {
-          comp = "source-over";
-          ss = getBgColor();
-        } else {
-          comp = "destination-out";
-          ss = "rgba(0,0,0,1)";
-        }
+        comp = "destination-out";
+        ss = "rgba(0,0,0,1)";
         sw = w * 2.5;
         alpha = 1;
       } else
@@ -744,8 +794,9 @@ export function useCanvas({
     const strength = smoothingRef.current;
     if (strength <= 0) return rawPt;
 
-    // Dead zone radius scales with smoothing (1–100 → 2–40px)
-    const deadZone = 2 + (strength / 100) * 38;
+    const { scale } = transformRef.current;
+    // Dead zone radius in world space scaled by zoom so cursor alignment is exact
+    const deadZone = (2 + (strength / 100) * 20) / Math.max(scale, 0.2);
 
     if (!stabilizerAnchorRef.current) {
       stabilizerAnchorRef.current = { x: rawPt.x, y: rawPt.y };
@@ -780,7 +831,7 @@ export function useCanvas({
     lastTimeRef.current = now;
     const speed = lastDistRef.current / dt;
     lastDistRef.current = 0;
-    return base * clamp(1.4 - speed * 0.06, 0.35, 1.8);
+    return base * clamp(1.2 - speed * 0.015, 0.5, 1.5);
   }, []);
 
   // ── Wheel zoom ────────────────────────────────────────────────────────────────
@@ -828,8 +879,29 @@ export function useCanvas({
 
       const { x: wx, y: wy } = screenToWorld(nx, ny);
 
-      // Middle mouse on image → move image; otherwise pan
-      if (e.button === 1) {
+      // Middle mouse or Right mouse (Mouse 2) — move image/text overlays, else pan
+      if (e.button === 1 || e.button === 2) {
+        // Hit-test text objects first (topmost)
+        const hitText = hitTestText(wx, wy);
+        if (hitText) {
+          if (e.detail === 2) {
+            // Double-right-click → re-enter edit mode
+            textObjectsRef.current = textObjectsRef.current.filter(t => t !== hitText);
+            const ns = { active: true, x: hitText.x, y: hitText.y, value: hitText.value };
+            textStateRef.current = ns;
+            setTextState(ns);
+            // Restore text style props
+            colorRef.current = hitText.color;
+            scheduleRedraw();
+            return;
+          }
+          isMovingTextRef.current = true;
+          movingTextRef.current = hitText;
+          textMoveStartRef.current = { x: wx - hitText.x, y: wy - hitText.y };
+          canvasRef.current?.setPointerCapture(e.pointerId);
+          if (canvasRef.current) canvasRef.current.style.cursor = "move";
+          return;
+        }
         const hit = hitTestImage(wx, wy);
         if (hit) {
           isMovingImageRef.current = true;
@@ -855,6 +927,11 @@ export function useCanvas({
         return;
       }
 
+      // Auto-flatten overlays before drawing so strokes go on top
+      if (imageObjectsRef.current.length > 0 || textObjectsRef.current.length > 0) {
+        flattenOverlays();
+      }
+
       pointerPressureRef.current = e.pressure || 0.5;
       const t = toolRef.current;
 
@@ -869,27 +946,118 @@ export function useCanvas({
         pushUndo();
         const id = getActiveLayerId();
         if (!id) return;
-        const lc = layerCanvasesRef.current[id];
-        if (!lc) return;
-        const lctx = lc.getContext("2d");
-        const imgData = lctx.getImageData(
-          0,
-          0,
-          worldWRef.current,
-          worldHRef.current,
-        );
-        const fillRgb = isBackgroundLayer()
-          ? hexToRgb(getBgColor())
-          : hexToRgb(colorRef.current);
-        floodFill(
-          imgData,
-          wx,
-          wy,
-          fillRgb,
-          fillToleranceRef.current,
-        );
-        lctx.putImageData(imgData, 0, 0);
+        
+        // Don't fill if clicking directly on an existing stroke
+        const clickLc = layerCanvasesRef.current[id];
+        if (clickLc) {
+          const cpa = clickLc.getContext("2d").getImageData(Math.floor(wx), Math.floor(wy), 1, 1).data[3];
+          if (cpa > 50) return;
+        }
+        
+        const w = worldWRef.current;
+        const h = worldHRef.current;
+        const tmp = document.createElement("canvas");
+        tmp.width = w;
+        tmp.height = h;
+        const tctx = tmp.getContext("2d");
+        
+        tctx.fillStyle = getBgColor();
+        tctx.fillRect(0, 0, w, h);
+        
+        if (layersRef.current) {
+          for (const l of layersRef.current) {
+            if (!l.visible) continue;
+            const lc = layerCanvasesRef.current[l.id];
+            if (lc) {
+              tctx.globalAlpha = l.opacity;
+              tctx.drawImage(lc, 0, 0);
+            }
+          }
+        }
+        tctx.globalAlpha = 1;
+        
+        const before = tctx.getImageData(0, 0, w, h);
+        const after = tctx.getImageData(0, 0, w, h);
+        
+        const hex = colorRef.current.replace("#", "");
+        const fillRgb = [
+          parseInt(hex.substring(0, 2), 16),
+          parseInt(hex.substring(2, 4), 16),
+          parseInt(hex.substring(4, 6), 16)
+        ];
+        
+        const visited = floodFill(after, wx, wy, fillRgb, 20); // 20 is tolerance
+        if (!visited) return;
+        
+        // Dilate visited mask by 2 pixels to cover the anti-aliasing halo
+        const fringe = new Uint8Array(w * h);
+        const pass1 = new Uint8Array(w * h);
+        for (let y = 0; y < h; y++) {
+          for (let x = 0; x < w; x++) {
+            const idx = y * w + x;
+            if (visited[idx]) continue;
+            if (
+              (x > 0 && visited[idx - 1]) ||
+              (x < w - 1 && visited[idx + 1]) ||
+              (y > 0 && visited[idx - w]) ||
+              (y < h - 1 && visited[idx + w])
+            ) {
+              pass1[idx] = 1;
+            }
+          }
+        }
+        for (let y = 0; y < h; y++) {
+          for (let x = 0; x < w; x++) {
+            const idx = y * w + x;
+            if (visited[idx] || pass1[idx]) continue;
+            if (
+              (x > 0 && pass1[idx - 1]) ||
+              (x < w - 1 && pass1[idx + 1]) ||
+              (y > 0 && pass1[idx - w]) ||
+              (y < h - 1 && pass1[idx + w])
+            ) {
+              fringe[idx] = 1;
+            }
+          }
+        }
+        // Combine into one fringe
+        for (let i = 0; i < fringe.length; i++) {
+          if (pass1[i]) fringe[i] = 1;
+        }
+        
+        const activeCtx = getActiveCtx();
+        const activeData = activeCtx.getImageData(0, 0, w, h);
+        
+        for (let i = 0; i < visited.length; i++) {
+          const pi = i * 4;
+          if (visited[i]) {
+            // Core fill area: opaque
+            activeData.data[pi] = fillRgb[0];
+            activeData.data[pi+1] = fillRgb[1];
+            activeData.data[pi+2] = fillRgb[2];
+            activeData.data[pi+3] = 255;
+          } else if (fringe[i]) {
+            // Fringe (anti-aliased edges): blend fill color *behind* existing stroke
+            // mathematically equivalent to globalCompositeOperation="destination-over"
+            const existingA = activeData.data[pi+3] / 255;
+            const invA = 1 - existingA;
+            
+            // If it's already opaque stroke (e.g. black), existingA is 1, so it stays perfectly black.
+            // If it's transparent gap, existingA is 0, it becomes the fill color.
+            // If it's 50% anti-aliased edge, it gets seamlessly filled beneath the stroke.
+            activeData.data[pi] = activeData.data[pi] * existingA + fillRgb[0] * invA;
+            activeData.data[pi+1] = activeData.data[pi+1] * existingA + fillRgb[1] * invA;
+            activeData.data[pi+2] = activeData.data[pi+2] * existingA + fillRgb[2] * invA;
+            activeData.data[pi+3] = 255; // Fill provides a solid backing
+          }
+        }
+        
+        activeCtx.putImageData(activeData, 0, 0);
         scheduleRedraw();
+        
+        if (isConnected && broadcastStroke) {
+          broadcastStroke({ tool: "fill", pts: [{x: wx, y: wy}], color: colorRef.current });
+        }
         return;
       }
 
@@ -998,6 +1166,15 @@ export function useCanvas({
         return;
       }
 
+      // Moving text object with right mouse
+      if (isMovingTextRef.current && movingTextRef.current) {
+        const { x: wx, y: wy } = screenToWorld(nx, ny);
+        movingTextRef.current.x = wx - textMoveStartRef.current.x;
+        movingTextRef.current.y = wy - textMoveStartRef.current.y;
+        scheduleRedraw();
+        return;
+      }
+
       // Moving imported image with middle mouse
       if (isMovingImageRef.current && movingImageRef.current) {
         const { x: wx, y: wy } = screenToWorld(nx, ny);
@@ -1071,7 +1248,7 @@ export function useCanvas({
       const rawPt = { x: wx, y: wy, pressure: e.pressure || 0.5 };
       const pt = getSmoothedPt(rawPt);
       const prev = prevPtRef.current;
-      const minDist = Math.max(0.1, strokeWidthRef.current * 0.05);
+      const minDist = 0.01;
       if (
         prev &&
         Math.abs(pt.x - prev.x) < minDist &&
@@ -1171,7 +1348,6 @@ export function useCanvas({
           width: w,
           opacity: brushOpacityRef.current,
           erase: t === "eraser",
-          eraseToBg: t === "eraser" && isBackgroundLayer(),
           brushType: brushTypeRef.current,
         };
         if (t === "eraser") {
@@ -1231,6 +1407,13 @@ export function useCanvas({
       const rect = canvasRef.current?.getBoundingClientRect();
       if (e) pointerCacheRef.current.delete(e.pointerId);
       if (pointerCacheRef.current.size < 2) isPinchingRef.current = false;
+      if (isMovingTextRef.current) {
+        isMovingTextRef.current = false;
+        movingTextRef.current = null;
+        if (canvasRef.current)
+          canvasRef.current.style.cursor = spaceHeldRef.current ? "grab" : "";
+        return;
+      }
       if (isMovingImageRef.current) {
         isMovingImageRef.current = false;
         movingImageRef.current = null;
@@ -1316,7 +1499,6 @@ export function useCanvas({
           width: w,
           opacity: brushOpacityRef.current,
           erase: t === "eraser",
-          eraseToBg: t === "eraser" && isBackgroundLayer(),
           brushType: brushTypeRef.current,
         };
         // Eraser was already drawn to layer in real-time; skip commitStroke
@@ -1350,6 +1532,12 @@ export function useCanvas({
     setTextState(ns);
   }, []);
 
+  const moveText = useCallback((nx, ny) => {
+    const ns = { ...textStateRef.current, x: nx, y: ny };
+    textStateRef.current = ns;
+    setTextState(ns);
+  }, []);
+
   const commitText = useCallback(() => {
     const { active, x, y, value } = textStateRef.current;
     if (!active || !value.trim()) {
@@ -1358,22 +1546,22 @@ export function useCanvas({
       setTextState(ns);
       return;
     }
-    pushUndo();
-    const ctx = getActiveCtx();
-    if (ctx) {
-      const style = `${textItalicRef.current ? "italic " : ""}${textBoldRef.current ? "bold " : ""}${textSizeRef.current}px ${textFontRef.current}`;
-      ctx.save();
-      ctx.font = style;
-      ctx.fillStyle = colorRef.current;
-      ctx.globalAlpha = brushOpacityRef.current;
-      ctx.fillText(value, x, y + textSizeRef.current);
-      ctx.restore();
-    }
+    // Measure text width for hit-testing
+    const font = `${textItalicRef.current ? "italic " : ""}${textBoldRef.current ? "bold " : ""}${textSizeRef.current}px ${textFontRef.current}`;
+    const tmp = document.createElement("canvas").getContext("2d");
+    tmp.font = font;
+    const metrics = tmp.measureText(value);
+    textObjectsRef.current.push({
+      x, y, value, font: textFontRef.current, size: textSizeRef.current,
+      bold: textBoldRef.current, italic: textItalicRef.current,
+      color: colorRef.current, opacity: brushOpacityRef.current,
+      w: metrics.width, h: textSizeRef.current * 1.3,
+    });
     const ns = { active: false, x: 0, y: 0, value: "" };
     textStateRef.current = ns;
     setTextState(ns);
     scheduleRedraw();
-  }, [pushUndo, getActiveCtx, scheduleRedraw]);
+  }, [scheduleRedraw]);
 
   const cancelText = useCallback(() => {
     const ns = { active: false, x: 0, y: 0, value: "" };
@@ -1389,6 +1577,27 @@ export function useCanvas({
     scheduleRedraw();
   }, [clearOverlay, scheduleRedraw]);
 
+  // ── Flatten overlays (bake images + text into active layer) ───────────────
+  const flattenOverlays = useCallback(() => {
+    const ctx = getActiveCtx();
+    if (!ctx) return;
+    pushUndo();
+    for (const imgObj of imageObjectsRef.current) {
+      ctx.drawImage(imgObj.img, imgObj.x, imgObj.y, imgObj.w, imgObj.h);
+    }
+    for (const tObj of textObjectsRef.current) {
+      ctx.save();
+      ctx.font = `${tObj.italic ? "italic " : ""}${tObj.bold ? "bold " : ""}${tObj.size}px ${tObj.font}`;
+      ctx.fillStyle = tObj.color;
+      ctx.globalAlpha = tObj.opacity;
+      ctx.fillText(tObj.value, tObj.x, tObj.y + tObj.size);
+      ctx.restore();
+    }
+    imageObjectsRef.current = [];
+    textObjectsRef.current = [];
+    scheduleRedraw();
+  }, [getActiveCtx, pushUndo, scheduleRedraw]);
+
   const deleteSelection = useCallback(() => {
     const pts = lassoPathRef.current;
     if (!pts || pts.length < 3) return;
@@ -1400,17 +1609,12 @@ export function useCanvas({
       ctx.moveTo(pts[0].x, pts[0].y);
       for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
       ctx.closePath();
-      if (isBackgroundLayer()) {
-        ctx.fillStyle = getBgColor();
-        ctx.globalCompositeOperation = "source-over";
-      } else {
-        ctx.globalCompositeOperation = "destination-out";
-      }
+      ctx.globalCompositeOperation = "destination-out";
       ctx.fill();
       ctx.restore();
     }
     clearSelection();
-  }, [pushUndo, getActiveCtx, clearSelection, isBackgroundLayer, getBgColor]);
+  }, [pushUndo, getActiveCtx, clearSelection]);
 
   // ── Zoom controls ─────────────────────────────────────────────────────────────
   const applyZoom = useCallback(
@@ -1473,12 +1677,10 @@ export function useCanvas({
         if (!lc) continue;
         const lctx = lc.getContext("2d");
         lctx.clearRect(0, 0, worldWRef.current, worldHRef.current);
-        if (l.id === ls[0]?.id) {
-          lctx.fillStyle = getBgColor();
-          lctx.fillRect(0, 0, worldWRef.current, worldHRef.current);
-        }
       }
     }
+    imageObjectsRef.current = [];
+    textObjectsRef.current = [];
     pathHistoryRef.current = [];
     clearOverlay();
     scheduleRedraw();
@@ -1508,15 +1710,11 @@ export function useCanvas({
     return tmp.toDataURL("image/png");
   }, []);
 
-  // ── Import image ──────────────────────────────────────────────────────────────
+  // ── Import image (as movable overlay — right/middle-click to drag) ──────────
   const importImage = useCallback(
     (dataUrl) => {
-      pushUndo();
       const img = new Image();
       img.onload = () => {
-        const ctx = getActiveCtx();
-        if (!ctx) return;
-        // Scale to fit if larger than 80% of world
         let w = img.width,
           h = img.height;
         const maxW = worldWRef.current * 0.8,
@@ -1526,17 +1724,16 @@ export function useCanvas({
           w *= s;
           h *= s;
         }
-        // Center on current viewport
         const t = transformRef.current;
         const canvas = canvasRef.current;
         const cx = (canvas.width / 2 - t.offsetX) / t.scale;
         const cy = (canvas.height / 2 - t.offsetY) / t.scale;
-        ctx.drawImage(img, cx - w / 2, cy - h / 2, w, h);
+        imageObjectsRef.current.push({ img, x: cx - w / 2, y: cy - h / 2, w, h });
         scheduleRedraw();
       };
       img.src = dataUrl;
     },
-    [pushUndo, getActiveCtx, scheduleRedraw],
+    [scheduleRedraw],
   );
 
   // ── Flip layer ────────────────────────────────────────────────────────────────
@@ -1591,8 +1788,6 @@ export function useCanvas({
       if (!layerId) return;
       const lc = ensureLayerCanvas(layerId);
       const lctx = lc.getContext("2d");
-      lctx.fillStyle = getBgColor();
-      lctx.fillRect(0, 0, worldWRef.current, worldHRef.current);
       for (const p of paths) drawPathToCtx(lctx, p.points, p);
       scheduleRedraw();
     },
@@ -1621,10 +1816,6 @@ export function useCanvas({
       if (!lc) continue;
       const lctx = lc.getContext("2d");
       lctx.clearRect(0, 0, worldWRef.current, worldHRef.current);
-      if (l.id === ls[0]?.id) {
-        lctx.fillStyle = getBgColor();
-        lctx.fillRect(0, 0, worldWRef.current, worldHRef.current);
-      }
     }
     pathHistoryRef.current = [];
     scheduleRedraw();
@@ -1693,12 +1884,16 @@ export function useCanvas({
     flipLayerV,
     textState,
     setTextValue,
+    moveText,
     commitText,
     cancelText,
     selectionState,
     clearSelection,
     deleteSelection,
+    worldToScreen,
+    screenToWorld,
     importImage,
+    flattenOverlays,
     scheduleRedraw,
     resizeWorld,
   };

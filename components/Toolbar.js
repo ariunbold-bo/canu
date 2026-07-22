@@ -53,6 +53,22 @@ import {
 } from "lucide-react";
 import { HexColorPicker, HexColorInput } from "react-colorful";
 
+function getTriggerCls(light) {
+  return light
+    ? cn(
+        "inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg",
+        "text-black/50 transition-all duration-150",
+        "hover:bg-black/8 hover:text-black/80 active:scale-95",
+        "disabled:pointer-events-none disabled:opacity-40",
+      )
+    : cn(
+        "inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg",
+        "text-[#8cb9e0]/70 transition-all duration-150",
+        "hover:bg-[#8cb9e0]/10 hover:text-[#8cb9e0] active:scale-95",
+        "disabled:pointer-events-none disabled:opacity-40",
+      );
+}
+
 const triggerCls = cn(
   "inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg",
   "text-[#8cb9e0]/70 transition-all duration-150",
@@ -60,34 +76,42 @@ const triggerCls = cn(
   "disabled:pointer-events-none disabled:opacity-40",
 );
 
-function ToolBtn({ tooltip, active, onClick, children, disabled = false }) {
+function ToolBtn({ tooltip, active, onClick, children, disabled = false, light = false }) {
+  const cls = getTriggerCls(light);
+  const activeCls = light
+    ? "bg-black/10 text-black/80 shadow-[0_0_12px_rgba(0,0,0,0.08)]"
+    : "bg-[#8cb9e0]/15 text-[#8cb9e0] shadow-[0_0_12px_rgba(140,185,224,0.2)]";
+  const tipBg = light
+    ? "bg-white border border-black/10 text-black/70 text-xs z-[200]"
+    : "bg-[#141832] border border-[#8cb9e0]/15 text-[#8cb9e0] text-xs z-[200]";
   return (
     <Tooltip>
       <TooltipTrigger
-        onClick={onClick}
+        onClick={(e) => {
+          onClick?.(e);
+          e.currentTarget?.blur?.();
+        }}
+        onPointerDown={(e) => e.currentTarget?.blur?.()}
         disabled={disabled}
-        className={cn(
-          triggerCls,
-          active &&
-            "bg-[#8cb9e0]/15 text-[#8cb9e0] shadow-[0_0_12px_rgba(140,185,224,0.2)]",
-        )}
+        className={cn(cls, active && activeCls)}
       >
         {children}
       </TooltipTrigger>
-      <TooltipContent
-        side="top"
-        className="bg-[#141832] border border-[#8cb9e0]/15 text-[#8cb9e0] text-xs z-[200]"
-      >
+      <TooltipContent side="top" className={tipBg}>
         {tooltip}
       </TooltipContent>
     </Tooltip>
   );
 }
 
-function SliderRow({ label, value, min, max, step = 1, onChange, unit = "" }) {
+function SliderRow({ label, value, min, max, step = 1, onChange, unit = "", isLightBg = false }) {
+  const textCol = isLightBg ? "text-black/50" : "text-[#8cb9e0]/50";
+  const accent = isLightBg ? "#000000" : "#8cb9e0";
+  const trackBg = isLightBg ? "rgba(0,0,0,0.1)" : "rgba(140,185,224,0.15)";
+
   return (
     <div className="flex items-center gap-2">
-      <span className="text-[10px] text-[#8cb9e0]/50 w-16 shrink-0">
+      <span className={cn("text-[10px] w-16 shrink-0", textCol)}>
         {label}
       </span>
       <input
@@ -99,11 +123,11 @@ function SliderRow({ label, value, min, max, step = 1, onChange, unit = "" }) {
         onChange={(e) => onChange(Number(e.target.value))}
         className="flex-1 h-1 rounded-full appearance-none cursor-pointer"
         style={{
-          accentColor: "#8cb9e0",
-          background: `linear-gradient(to right,#8cb9e0 ${((value - min) / (max - min)) * 100}%,rgba(140,185,224,0.15) 0%)`,
+          accentColor: accent,
+          background: `linear-gradient(to right,${accent} ${((value - min) / (max - min)) * 100}%,${trackBg} 0%)`,
         }}
       />
-      <span className="text-[11px] text-[#8cb9e0]/50 font-mono w-8 text-right">
+      <span className={cn("text-[11px] font-mono w-8 text-right", textCol)}>
         {value}
         {unit}
       </span>
@@ -188,9 +212,34 @@ export default function Toolbar({
   userAvatar,
   // Canvas size
   onCanvasSizeOpen,
+  // Board Background Color
+  worldBgColor = "#0d1020",
+  onWorldBgColorChange,
+  isLightBg = false,
 }) {
   const importRef = useRef(null);
   const [activePopover, setActivePopover] = useState(null);
+
+  const textTitle = isLightBg ? "text-black/50" : "text-[#8cb9e0]/50";
+  const textMuted = isLightBg ? "text-black/40" : "text-[#8cb9e0]/40";
+  const textCheck = isLightBg ? "text-black/60" : "text-[#8cb9e0]/60";
+  const btnBase = isLightBg 
+    ? "text-black/70 hover:bg-black/5 hover:text-black" 
+    : "text-[#c7d8ec]/80 hover:bg-[#8cb9e0]/10 hover:text-[#c7d8ec]";
+  const btnActive = isLightBg
+    ? "bg-black/10 text-black border border-black/20"
+    : "bg-[#8cb9e0]/20 text-[#8cb9e0] border border-[#8cb9e0]/30";
+  const btnInactive = isLightBg
+    ? "text-black/50 border border-black/10 hover:border-black/20 hover:text-black"
+    : "text-[#8cb9e0]/50 border border-[#8cb9e0]/10 hover:border-[#8cb9e0]/25";
+  const dividerBg = isLightBg ? "bg-black/10" : "bg-[#8cb9e0]/10";
+  const inputBg = isLightBg
+    ? "bg-white text-black border-black/15"
+    : "bg-[#0d1020] text-[#8cb9e0] border-[#8cb9e0]/15";
+  const accent = isLightBg ? "accent-black" : "accent-[#8cb9e0]";
+  const popoverBg = isLightBg
+    ? "bg-white/95 backdrop-blur-xl border border-black/10 w-auto p-3 rounded-2xl shadow-2xl z-[150]"
+    : "bg-[#141832]/95 backdrop-blur-xl border border-[#8cb9e0]/15 w-auto p-3 rounded-2xl shadow-2xl z-[150]";
 
   const handleImport = (e) => {
     const file = e.target.files?.[0];
@@ -204,10 +253,11 @@ export default function Toolbar({
   // Brush settings popover content
   const brushSettings = (
     <div className="flex flex-col gap-3 p-1 min-w-[220px]">
-      <div className="text-[11px] text-[#8cb9e0]/50 font-semibold uppercase tracking-wider">
+      <div className={cn("text-[11px] font-semibold uppercase tracking-wider", textTitle)}>
         Brush Settings
       </div>
       <SliderRow
+        isLightBg={isLightBg}
         label="Size"
         value={strokeWidth}
         min={1}
@@ -216,6 +266,7 @@ export default function Toolbar({
         unit="px"
       />
       <SliderRow
+        isLightBg={isLightBg}
         label="Opacity"
         value={Math.round(brushOpacity * 100)}
         min={0}
@@ -224,6 +275,7 @@ export default function Toolbar({
         unit="%"
       />
       <SliderRow
+        isLightBg={isLightBg}
         label="Smoothing"
         value={smoothing}
         min={0}
@@ -232,6 +284,7 @@ export default function Toolbar({
         unit="%"
       />
       <SliderRow
+        isLightBg={isLightBg}
         label="Fill Tol."
         value={fillTolerance}
         min={0}
@@ -242,7 +295,7 @@ export default function Toolbar({
 
       {/* Brush type */}
       <div>
-        <div className="text-[10px] text-[#8cb9e0]/50 mb-1.5">Brush type</div>
+        <div className={cn("text-[10px] mb-1.5", textTitle)}>Brush type</div>
         <div className="flex flex-wrap gap-1">
           {BRUSH_TYPES.map((bt) => (
             <button
@@ -250,9 +303,7 @@ export default function Toolbar({
               onClick={() => onBrushTypeChange(bt)}
               className={cn(
                 "px-2 py-0.5 rounded text-[11px] capitalize transition-all",
-                brushType === bt
-                  ? "bg-[#8cb9e0]/20 text-[#8cb9e0] border border-[#8cb9e0]/30"
-                  : "text-[#8cb9e0]/50 border border-[#8cb9e0]/10 hover:border-[#8cb9e0]/25",
+                brushType === bt ? btnActive : btnInactive,
               )}
             >
               {bt}
@@ -267,16 +318,16 @@ export default function Toolbar({
           type="checkbox"
           checked={simulatePressure}
           onChange={(e) => onSimulatePressureChange(e.target.checked)}
-          className="accent-[#8cb9e0]"
+          className={accent}
         />
-        <span className="text-[11px] text-[#8cb9e0]/60">
+        <span className={cn("text-[11px]", textCheck)}>
           Pressure simulation
         </span>
       </label>
 
       {/* Symmetry */}
       <div>
-        <div className="text-[10px] text-[#8cb9e0]/50 mb-1.5">
+        <div className={cn("text-[10px] mb-1.5", textTitle)}>
           Mirror / Symmetry
         </div>
         <div className="flex gap-1">
@@ -291,9 +342,7 @@ export default function Toolbar({
               onClick={() => onSymmetryChange(val)}
               className={cn(
                 "px-2 py-0.5 rounded text-[11px] transition-all",
-                symmetryMode === val
-                  ? "bg-[#8cb9e0]/20 text-[#8cb9e0] border border-[#8cb9e0]/30"
-                  : "text-[#8cb9e0]/50 border border-[#8cb9e0]/10 hover:border-[#8cb9e0]/25",
+                symmetryMode === val ? btnActive : btnInactive,
               )}
             >
               {label}
@@ -307,10 +356,11 @@ export default function Toolbar({
   // Text settings popover
   const textSettings = (
     <div className="flex flex-col gap-3 p-1 min-w-[200px]">
-      <div className="text-[11px] text-[#8cb9e0]/50 font-semibold uppercase tracking-wider">
+      <div className={cn("text-[11px] font-semibold uppercase tracking-wider", textTitle)}>
         Text Tool
       </div>
       <SliderRow
+        isLightBg={isLightBg}
         label="Size"
         value={textSize}
         min={8}
@@ -319,11 +369,11 @@ export default function Toolbar({
         unit="px"
       />
       <div>
-        <div className="text-[10px] text-[#8cb9e0]/50 mb-1.5">Font</div>
+        <div className={cn("text-[10px] mb-1.5", textTitle)}>Font</div>
         <select
           value={textFont}
           onChange={(e) => onTextFontChange(e.target.value)}
-          className="w-full bg-[#0d1020] text-[#8cb9e0] text-xs rounded px-2 py-1 border border-[#8cb9e0]/15 outline-none"
+          className={cn("w-full text-xs rounded px-2 py-1 border outline-none", inputBg)}
         >
           <option value="Poppins, sans-serif">Poppins</option>
           <option value="serif">Serif</option>
@@ -338,18 +388,18 @@ export default function Toolbar({
             type="checkbox"
             checked={textBold}
             onChange={(e) => onTextBoldChange(e.target.checked)}
-            className="accent-[#8cb9e0]"
+            className={accent}
           />
-          <span className="text-[11px] text-[#8cb9e0]/60 font-bold">Bold</span>
+          <span className={cn("text-[11px] font-bold", textCheck)}>Bold</span>
         </label>
         <label className="flex items-center gap-1.5 cursor-pointer">
           <input
             type="checkbox"
             checked={textItalic}
             onChange={(e) => onTextItalicChange(e.target.checked)}
-            className="accent-[#8cb9e0]"
+            className={accent}
           />
-          <span className="text-[11px] text-[#8cb9e0]/60 italic">Italic</span>
+          <span className={cn("text-[11px] italic", textCheck)}>Italic</span>
         </label>
       </div>
     </div>
@@ -357,7 +407,7 @@ export default function Toolbar({
 
   const shapeSelector = (
     <div className="flex flex-col gap-2 p-1">
-      <div className="text-[11px] text-[#8cb9e0]/50 font-semibold uppercase tracking-wider mb-1">
+      <div className={cn("text-[11px] font-semibold uppercase tracking-wider mb-1", textTitle)}>
         Shape
       </div>
       {Object.entries(SHAPE_ICONS).map(([key, icon]) => (
@@ -369,9 +419,7 @@ export default function Toolbar({
           }}
           className={cn(
             "flex items-center gap-2 px-2 py-1.5 rounded text-[11px] capitalize transition-all",
-            shapeType === key && tool === "shape"
-              ? "bg-[#8cb9e0]/20 text-[#8cb9e0]"
-              : "text-[#8cb9e0]/60 hover:bg-[#8cb9e0]/10 hover:text-[#8cb9e0]",
+            shapeType === key && tool === "shape" ? (isLightBg ? "bg-black/10 text-black" : "bg-[#8cb9e0]/20 text-[#8cb9e0]") : (isLightBg ? "text-black/60 hover:bg-black/5 hover:text-black" : "text-[#8cb9e0]/60 hover:bg-[#8cb9e0]/10 hover:text-[#8cb9e0]"),
           )}
         >
           {icon} {key}
@@ -382,15 +430,15 @@ export default function Toolbar({
 
   const renderSecondaryTools = (inPopover = false) => (
     <>
-      <ToolBtn tooltip="Download image" onClick={onDownload}>
+      <ToolBtn tooltip="Download image" onClick={onDownload} light={isLightBg}>
         <Download size={17} />
       </ToolBtn>
       {isSignedIn && (
         <>
-          <ToolBtn tooltip="Save drawing" onClick={onSave}>
+          <ToolBtn tooltip="Save drawing" onClick={onSave} light={isLightBg}>
             <Save size={17} />
           </ToolBtn>
-          <ToolBtn tooltip="Drawing history" onClick={onHistoryOpen}>
+          <ToolBtn tooltip="Drawing history" onClick={onHistoryOpen} light={isLightBg}>
             <History size={17} />
           </ToolBtn>
         </>
@@ -399,27 +447,29 @@ export default function Toolbar({
   );
 
   return (
-    <div className="floating-toolbar">
+    <div className={cn("floating-toolbar", isLightBg && "light-bg")}>
       {/* ── Main Menu ── */}
       <Popover>
-        <PopoverTrigger className={cn(triggerCls)}>
+        <PopoverTrigger className={cn(getTriggerCls(isLightBg))}>
           <Menu size={17} />
         </PopoverTrigger>
         <PopoverContent
           side="top"
           sideOffset={14}
-          className="bg-[#141832]/95 backdrop-blur-xl border border-[#8cb9e0]/15 w-56 p-2 rounded-2xl shadow-2xl z-[150]"
+          className={isLightBg
+            ? "bg-white/95 backdrop-blur-xl border border-black/10 w-56 p-2 rounded-2xl shadow-2xl z-[150]"
+            : "bg-[#141832]/95 backdrop-blur-xl border border-[#8cb9e0]/15 w-56 p-2 rounded-2xl shadow-2xl z-[150]"}
         >
           <div className="flex flex-col gap-0.5">
-            <p className="text-[10px] uppercase tracking-wider text-[#8cb9e0]/40 px-3 pt-1 pb-1.5 font-medium">Menu</p>
+            <p className={cn("text-[10px] uppercase tracking-wider px-3 pt-1 pb-1.5 font-medium", textMuted)}>Menu</p>
             {isSignedIn && (
               <button
                 onClick={onRoomOpen}
                 className={cn(
                   "flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm transition-all",
                   isInRoom
-                    ? "bg-[#8cb9e0]/15 text-[#8cb9e0]"
-                    : "text-[#c7d8ec]/80 hover:bg-[#8cb9e0]/10 hover:text-[#c7d8ec]"
+                    ? (isLightBg ? "bg-black/10 text-black" : "bg-[#8cb9e0]/15 text-[#8cb9e0]")
+                    : btnBase
                 )}
               >
                 <Users size={16} />
@@ -428,26 +478,62 @@ export default function Toolbar({
               </button>
             )}
             <button
-              className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm text-[#c7d8ec]/80 hover:bg-[#8cb9e0]/10 hover:text-[#c7d8ec] transition-all"
+              className={cn("flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm transition-all", btnBase)}
               disabled
             >
               <Gamepad2 size={16} />
               <span>Games</span>
-              <span className="ml-auto text-[10px] text-[#8cb9e0]/40 font-medium">Soon</span>
+              <span className={cn("ml-auto text-[10px] font-medium", textMuted)}>Soon</span>
             </button>
             <button
               onClick={onCanvasSizeOpen}
-              className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm text-[#c7d8ec]/80 hover:bg-[#8cb9e0]/10 hover:text-[#c7d8ec] transition-all"
+              className={cn("flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm transition-all w-full text-left", btnBase)}
             >
               <Maximize2 size={16} />
               <span>Canvas Size</span>
             </button>
+            <Dialog>
+              <DialogTrigger className={cn("flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm transition-all w-full text-left", btnBase)}>
+                <div
+                  className="w-4 h-4 rounded-md border border-[#8cb9e0]/30 shadow-sm shrink-0"
+                  style={{ background: worldBgColor }}
+                />
+                <span>Background Color</span>
+              </DialogTrigger>
+              <DialogContent className="sm:max-w-xs bg-[#141832]/95 backdrop-blur-xl border-[#8cb9e0]/20 shadow-2xl flex flex-col items-center p-6 pt-10 z-[250]">
+                <DialogTitle className="sr-only">Background Color</DialogTitle>
+                <DialogDescription className="sr-only">
+                  Select background color
+                </DialogDescription>
+                <div className="text-[11px] text-[#8cb9e0]/50 font-semibold uppercase tracking-wider mb-4">
+                  Background Color
+                </div>
+                <div className="w-full flex justify-center mb-4 mt-1">
+                  <HexColorPicker
+                    color={worldBgColor}
+                    onChange={onWorldBgColorChange}
+                  />
+                </div>
+                <div className="flex items-center gap-3 w-full bg-[#0d1020]/50 p-2.5 rounded-xl border border-[#8cb9e0]/10">
+                  <div
+                    className="w-6 h-6 rounded-md border border-[#8cb9e0]/40 shrink-0"
+                    style={{ background: worldBgColor }}
+                  />
+                  <HexColorInput
+                    color={worldBgColor}
+                    onChange={onWorldBgColorChange}
+                    prefixed
+                    className="w-20 bg-transparent text-sm text-[#8cb9e0]/90 font-mono tracking-wider uppercase outline-none"
+                  />
+                </div>
+              </DialogContent>
+            </Dialog>
             {!isSignedIn && (
               <>
-                <div className="h-px bg-[#8cb9e0]/10 my-1" />
+                <div className={cn("h-px my-1", dividerBg)} />
                 <button
                   onClick={onSignUp}
-                  className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm text-[#8cb9e0] hover:bg-[#8cb9e0]/15 transition-all font-medium"
+                  className={cn("flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm transition-all font-medium", isLightBg ? "text-black/80 hover:bg-black/10" : "text-[#8cb9e0] hover:bg-[#8cb9e0]/15")}
                 >
                   <LogIn size={16} />
                   <span>Sign In</span>
@@ -527,6 +613,8 @@ export default function Toolbar({
         </DialogContent>
       </Dialog>
 
+
+
       <div className="toolbar-divider" />
 
       {/* ── Drawing tools ── */}
@@ -542,9 +630,9 @@ export default function Toolbar({
             if (tool !== "pen") onToolChange("pen");
           }}
           className={cn(
-            triggerCls,
+            getTriggerCls(isLightBg),
             tool === "pen" &&
-              "bg-[#8cb9e0]/15 text-[#8cb9e0] shadow-[0_0_12px_rgba(140,185,224,0.2)]",
+              (isLightBg ? "bg-black/10 text-black/80 shadow-[0_0_12px_rgba(0,0,0,0.08)]" : "bg-[#8cb9e0]/15 text-[#8cb9e0] shadow-[0_0_12px_rgba(140,185,224,0.2)]"),
           )}
         >
           <Pen size={17} />
@@ -552,7 +640,7 @@ export default function Toolbar({
         <PopoverContent
           side="top"
           sideOffset={14}
-          className="bg-[#141832]/95 backdrop-blur-xl border border-[#8cb9e0]/15 w-auto p-3 rounded-2xl shadow-2xl z-[150]"
+          className={popoverBg}
         >
           {brushSettings}
         </PopoverContent>
@@ -569,9 +657,9 @@ export default function Toolbar({
             if (tool !== "eraser") onToolChange("eraser");
           }}
           className={cn(
-            triggerCls,
+            getTriggerCls(isLightBg),
             tool === "eraser" &&
-              "bg-[#8cb9e0]/15 text-[#8cb9e0] shadow-[0_0_12px_rgba(140,185,224,0.2)]",
+              (isLightBg ? "bg-black/10 text-black/80 shadow-[0_0_12px_rgba(0,0,0,0.08)]" : "bg-[#8cb9e0]/15 text-[#8cb9e0] shadow-[0_0_12px_rgba(140,185,224,0.2)]"),
           )}
         >
           <Eraser size={17} />
@@ -579,13 +667,14 @@ export default function Toolbar({
         <PopoverContent
           side="top"
           sideOffset={14}
-          className="bg-[#141832]/95 backdrop-blur-xl border border-[#8cb9e0]/15 w-auto p-3 rounded-2xl shadow-2xl z-[150]"
+          className={popoverBg}
         >
           <div className="flex flex-col gap-3 p-1 min-w-[220px]">
-            <div className="text-[11px] text-[#8cb9e0]/50 font-semibold uppercase tracking-wider">
+            <div className={cn("text-[11px] font-semibold uppercase tracking-wider", textTitle)}>
               Eraser Settings
             </div>
             <SliderRow
+              isLightBg={isLightBg}
               label="Size"
               value={strokeWidth}
               min={1}
@@ -594,6 +683,7 @@ export default function Toolbar({
               unit="px"
             />
             <SliderRow
+              isLightBg={isLightBg}
               label="Opacity"
               value={Math.round(brushOpacity * 100)}
               min={0}
@@ -604,39 +694,19 @@ export default function Toolbar({
           </div>
         </PopoverContent>
       </Popover>
-      <ToolBtn
-        tooltip="Eyedropper"
-        active={tool === "eyedropper"}
-        onClick={() => onToolChange("eyedropper")}
-      >
+      <ToolBtn tooltip="Eyedropper" active={tool === "eyedropper"} onClick={() => onToolChange("eyedropper")} light={isLightBg}>
         <Pipette size={17} />
       </ToolBtn>
-      <ToolBtn
-        tooltip="Fill bucket"
-        active={tool === "fill"}
-        onClick={() => onToolChange("fill")}
-      >
+      <ToolBtn tooltip="Fill bucket" active={tool === "fill"} onClick={() => onToolChange("fill")} light={isLightBg}>
         <PaintBucket size={17} />
       </ToolBtn>
-      <ToolBtn
-        tooltip="Smudge"
-        active={tool === "smudge"}
-        onClick={() => onToolChange("smudge")}
-      >
+      <ToolBtn tooltip="Smudge" active={tool === "smudge"} onClick={() => onToolChange("smudge")} light={isLightBg}>
         <Droplets size={17} />
       </ToolBtn>
-      <ToolBtn
-        tooltip="Blur"
-        active={tool === "blur"}
-        onClick={() => onToolChange("blur")}
-      >
+      <ToolBtn tooltip="Blur" active={tool === "blur"} onClick={() => onToolChange("blur")} light={isLightBg}>
         <Blend size={17} />
       </ToolBtn>
-      <ToolBtn
-        tooltip="Lasso select"
-        active={tool === "lasso"}
-        onClick={() => onToolChange("lasso")}
-      >
+      <ToolBtn tooltip="Lasso select" active={tool === "lasso"} onClick={() => onToolChange("lasso")} light={isLightBg}>
         <Lasso size={17} />
       </ToolBtn>
 
@@ -653,9 +723,9 @@ export default function Toolbar({
             if (tool !== "shape") onToolChange("shape");
           }}
           className={cn(
-            triggerCls,
+            getTriggerCls(isLightBg),
             tool === "shape" &&
-              "bg-[#8cb9e0]/15 text-[#8cb9e0] shadow-[0_0_12px_rgba(140,185,224,0.2)]",
+              (isLightBg ? "bg-black/10 text-black/80 shadow-[0_0_12px_rgba(0,0,0,0.08)]" : "bg-[#8cb9e0]/15 text-[#8cb9e0] shadow-[0_0_12px_rgba(140,185,224,0.2)]"),
           )}
         >
           {SHAPE_ICONS[shapeType] ?? <Square size={17} />}
@@ -663,7 +733,7 @@ export default function Toolbar({
         <PopoverContent
           side="top"
           sideOffset={14}
-          className="bg-[#141832]/95 backdrop-blur-xl border border-[#8cb9e0]/15 w-auto p-3 rounded-2xl shadow-2xl z-[150]"
+          className={popoverBg}
         >
           {shapeSelector}
         </PopoverContent>
@@ -673,9 +743,9 @@ export default function Toolbar({
       <Popover>
         <PopoverTrigger
           className={cn(
-            triggerCls,
+            getTriggerCls(isLightBg),
             tool === "text" &&
-              "bg-[#8cb9e0]/15 text-[#8cb9e0] shadow-[0_0_12px_rgba(140,185,224,0.2)]",
+              (isLightBg ? "bg-black/10 text-black/80 shadow-[0_0_12px_rgba(0,0,0,0.08)]" : "bg-[#8cb9e0]/15 text-[#8cb9e0] shadow-[0_0_12px_rgba(140,185,224,0.2)]"),
           )}
           onClick={() => onToolChange("text")}
         >
@@ -684,7 +754,7 @@ export default function Toolbar({
         <PopoverContent
           side="top"
           sideOffset={14}
-          className="bg-[#141832]/95 backdrop-blur-xl border border-[#8cb9e0]/15 w-auto p-3 rounded-2xl shadow-2xl z-[150]"
+          className={popoverBg}
         >
           {textSettings}
         </PopoverContent>
@@ -693,13 +763,13 @@ export default function Toolbar({
 
 
       {/* ── History ── */}
-      <ToolBtn tooltip="Undo  Ctrl+Z" onClick={onUndo}>
+      <ToolBtn tooltip="Undo  Ctrl+Z" onClick={onUndo} light={isLightBg}>
         <Undo2 size={17} />
       </ToolBtn>
-      <ToolBtn tooltip="Redo  Ctrl+Y" onClick={onRedo}>
+      <ToolBtn tooltip="Redo  Ctrl+Y" onClick={onRedo} light={isLightBg}>
         <Redo2 size={17} />
       </ToolBtn>
-      <ToolBtn tooltip="Clear canvas" onClick={onClear}>
+      <ToolBtn tooltip="Clear canvas" onClick={onClear} light={isLightBg}>
         <Trash2 size={17} />
       </ToolBtn>
 
@@ -710,6 +780,7 @@ export default function Toolbar({
         tooltip="Layers"
         active={isLayersPanelOpen}
         onClick={onLayersToggle}
+        light={isLightBg}
       >
         <Layers size={17} />
       </ToolBtn>
@@ -725,6 +796,7 @@ export default function Toolbar({
       <ToolBtn
         tooltip="Import image"
         onClick={() => importRef.current?.click()}
+        light={isLightBg}
       >
         <ImagePlus size={17} />
       </ToolBtn>
@@ -734,7 +806,7 @@ export default function Toolbar({
       </div>
       <div className="flex md:hidden items-center">
         <Popover>
-          <PopoverTrigger className={triggerCls}>
+          <PopoverTrigger className={cn(getTriggerCls(isLightBg))}>
             <MoreHorizontal size={17} />
           </PopoverTrigger>
           <PopoverContent

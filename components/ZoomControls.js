@@ -8,21 +8,24 @@ export default function ZoomControls({
   onZoomOut,
   onResetZoom,
   onFitToScreen,
+  isLightBg = false,
 }) {
+  const blurBtn = (e) => e.currentTarget?.blur?.();
   return (
-    <div className="zoom-controls">
-      <button onClick={onZoomOut} title="Zoom out" className="zoom-btn">
+    <div className={`zoom-controls ${isLightBg ? 'light-bg' : ''}`}>
+      <button onClick={onZoomOut} onPointerDown={blurBtn} title="Zoom out" className="zoom-btn">
         <ZoomOut size={14} />
       </button>
-      <span className="text-[11px] text-[#8cb9e0]/60 font-mono w-12 text-center select-none">
+      <span className={`text-[11px] font-mono w-12 text-center select-none ${isLightBg ? 'text-black/60' : 'text-[#8cb9e0]/60'}`}>
         {Math.round((zoom ?? 1) * 100)}%
       </span>
-      <button onClick={onZoomIn} title="Zoom in" className="zoom-btn">
+      <button onClick={onZoomIn} onPointerDown={blurBtn} title="Zoom in" className="zoom-btn">
         <ZoomIn size={14} />
       </button>
-      <div className="w-px h-4 bg-[#8cb9e0]/15 mx-1" />
+      <div className={`w-px h-4 mx-1 ${isLightBg ? 'bg-black/15' : 'bg-[#8cb9e0]/15'}`} />
       <button
         onClick={onFitToScreen}
+        onPointerDown={blurBtn}
         title="Fit to screen"
         className="zoom-btn"
       >
@@ -30,6 +33,7 @@ export default function ZoomControls({
       </button>
       <button
         onClick={onResetZoom}
+        onPointerDown={blurBtn}
         title="Reset zoom (100%)"
         className="zoom-btn"
       >

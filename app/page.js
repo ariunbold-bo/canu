@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { UserButton, useUser } from "@clerk/nextjs";
+import { Eye, EyeOff } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import Toolbar from "@/components/Toolbar";
 import LayersPanel from "@/components/LayersPanel";
@@ -13,6 +14,10 @@ import { useRoom } from "@/hooks/useRoom";
 import { useDrawingHistory } from "@/hooks/useDrawingHistory";
 import { useCanvas } from "@/hooks/useCanvas";
 import { useColorSwatches } from "@/hooks/useColorSwatches";
+
+// Dear developer if you are reading this, dont even try refactoring or optimizing
+// as doing this will eventually result in wasted hours
+// Wasted hours counter: 5
 
 // ── Layer helpers ──────────────────────────────────────────────────────────────
 let _layerCounter = 1;
@@ -47,7 +52,7 @@ function getCursor(tool) {
 export default function HomePage() {
   // ── Drawing state ─────────────────────────────────────────────────────────────
   const [tool, setTool] = useState("pen");
-  const [color, setColor] = useState("#8cb9e0");
+  const [color, setColor] = useState("#000000");
   const [strokeWidth, setStrokeWidth] = useState(4);
   const [brushType, setBrushType] = useState("pen");
   const [brushOpacity, setBrushOpacity] = useState(1);
@@ -61,7 +66,10 @@ export default function HomePage() {
   const [textBold, setTextBold] = useState(false);
   const [textItalic, setTextItalic] = useState(false);
 
-  // ── Layer state ───────────────────────────────────────────────────────────────
+  // ── UI state ──────────────────────────────────────────────────────────────────
+  const [toolbarVisible, setToolbarVisible] = useState(true);
+
+  // ── Connection & user ───────────────────────────────────────────────────────────────
   const [layers, setLayers] = useState(() => [makeLayer("Background")]);
   const [activeLayerIndex, setActiveLayerIndex] = useState(0);
   const [layersPanelOpen, setLayersPanelOpen] = useState(false);
@@ -72,7 +80,7 @@ export default function HomePage() {
   const [canvasSizeDialogOpen, setCanvasSizeDialogOpen] = useState(false);
   const [worldW, setWorldW] = useState(1920);
   const [worldH, setWorldH] = useState(1080);
-  const [worldBgColor, setWorldBgColor] = useState("#0d1020");
+  const [worldBgColor, setWorldBgColor] = useState("#ffffff");
   const [toast, setToast] = useState(null);
 
   const router = useRouter();
@@ -132,12 +140,16 @@ export default function HomePage() {
     flipLayerV,
     textState,
     setTextValue,
+    moveText,
     commitText,
     cancelText,
     selectionState,
     clearSelection,
     deleteSelection,
+    worldToScreen,
+    screenToWorld,
     importImage,
+    flattenOverlays,
     scheduleRedraw,
     resizeWorld,
   } = useCanvas({
@@ -439,6 +451,8 @@ export default function HomePage() {
 
   return (
     <>
+      {/* ── Adaptive contrast ── */}
+      {(() => { const r=parseInt(worldBgColor.slice(1,3),16),g=parseInt(worldBgColor.slice(3,5),16),b=parseInt(worldBgColor.slice(5,7),16); window.__canuIsLightBg=(0.299*r+0.587*g+0.114*b)>140; })()}
       {/* ── Canvas ── */}
       <canvas
         ref={canvasCallbackRef}
@@ -453,74 +467,98 @@ export default function HomePage() {
         onPointerLeave={onPointerUp}
         onPointerCancel={onPointerUp}
         onWheel={onWheel}
+        onContextMenu={(e) => e.preventDefault()}
       />
 
       {/* ── Text input overlay ── */}
       {textState.active &&
         (() => {
-          const { scale, offsetX, offsetY } = canvasRef.current
-            ? (() => {
-                // Get transform from canvas (approximate via zoom state)
-                return { scale: zoom, offsetX: 0, offsetY: 0 };
-              })()
-            : { scale: 1, offsetX: 0, offsetY: 0 };
-          const screenX =
-            textState.x * zoom +
-            (canvasRef.current ? (window.innerWidth - 1920 * zoom) / 2 : 0);
-          const screenY =
-            textState.y * zoom +
-            (canvasRef.current ? (window.innerHeight - 1080 * zoom) / 2 : 0);
+          const screenPos = worldToScreen
+            ? worldToScreen(textState.x, textState.y)
+            : { x: textState.x, y: textState.y };
+
+          const handleDragStart = (e) => {
+            e.preventDefault();
+            const startMouseX = e.clientX;
+            const startMouseY = e.clientY;
+            const startTextX = textState.x;
+            const startTextY = textState.y;
+
+            const onPointerMove = (moveEv) => {
+              const dx = (moveEv.clientX - startMouseX) / (zoom || 1);
+              const dy = (moveEv.clientY - startMouseY) / (zoom || 1);
+              moveText(startTextX + dx, startTextY + dy);
+            };
+
+            const onPointerUp = () => {
+              window.removeEventListener("pointermove", onPointerMove);
+              window.removeEventListener("pointerup", onPointerUp);
+            };
+
+            window.addEventListener("pointermove", onPointerMove);
+            window.addEventListener("pointerup", onPointerUp);
+          };
+
           return (
             <div
               style={{
                 position: "fixed",
-                left: screenX,
-                top: screenY,
+                left: screenPos.x,
+                top: screenPos.y,
                 zIndex: 300,
                 display: "flex",
-                alignItems: "flex-start",
-                gap: 8,
+                flexDirection: "column",
+                gap: 4,
               }}
             >
-              <textarea
-                autoFocus
-                value={textState.value}
-                onChange={(e) => setTextValue(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && !e.shiftKey) {
-                    e.preventDefault();
-                    commitText();
-                  }
-                  if (e.key === "Escape") cancelText();
-                }}
-                style={{
-                  font: `${textItalic ? "italic " : ""}${textBold ? "bold " : ""}${textSize}px ${textFont}`,
-                  color,
-                  background: "rgba(13,16,32,0.6)",
-                  border: "1px dashed rgba(140,185,224,0.5)",
-                  outline: "none",
-                  resize: "none",
-                  padding: "4px 6px",
-                  borderRadius: 4,
-                  minWidth: 80,
-                  backdropFilter: "blur(4px)",
-                }}
-                rows={1}
-                placeholder="Type here…"
-              />
-              <div className="flex flex-col gap-1">
-                <button
-                  onClick={commitText}
-                  className="px-2 py-0.5 rounded bg-[#8cb9e0]/20 text-[#8cb9e0] text-xs hover:bg-[#8cb9e0]/30"
-                >
-                  ✓
-                </button>
-                <button
-                  onClick={cancelText}
-                  className="px-2 py-0.5 rounded bg-red-500/20 text-red-400 text-xs hover:bg-red-500/30"
-                >
-                  ✕
-                </button>
+              <div
+                onPointerDown={handleDragStart}
+                className="flex items-center gap-1.5 px-2 py-0.5 rounded text-[10px] text-[#8cb9e0] bg-[#141832]/90 border border-[#8cb9e0]/30 cursor-move select-none shadow-md backdrop-blur-md"
+                title="Click and drag to move text location"
+              >
+                <span>⋮⋮ Drag to move text</span>
+              </div>
+              <div className="flex items-start gap-2">
+                <textarea
+                  autoFocus
+                  value={textState.value}
+                  onChange={(e) => setTextValue(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !e.shiftKey) {
+                      e.preventDefault();
+                      commitText();
+                    }
+                    if (e.key === "Escape") cancelText();
+                  }}
+                  style={{
+                    font: `${textItalic ? "italic " : ""}${textBold ? "bold " : ""}${textSize}px ${textFont}`,
+                    color,
+                    background: "rgba(13,16,32,0.75)",
+                    border: "1px dashed rgba(140,185,224,0.6)",
+                    outline: "none",
+                    resize: "none",
+                    padding: "4px 6px",
+                    borderRadius: 4,
+                    minWidth: 100,
+                    backdropFilter: "blur(4px)",
+                  }}
+                  rows={1}
+                  placeholder="Type here…"
+                />
+                <div className="flex flex-col gap-1">
+                  <button
+                    onClick={commitText}
+                    className="px-2 py-0.5 rounded bg-[#8cb9e0]/20 text-[#8cb9e0] text-xs hover:bg-[#8cb9e0]/30"
+                  >
+                    ✓
+                  </button>
+                  <button
+                    onClick={cancelText}
+                    className="px-2 py-0.5 rounded bg-red-500/20 text-red-400 text-xs hover:bg-red-500/30"
+                  >
+                    ✕
+                  </button>
+                </div>
               </div>
             </div>
           );
@@ -586,6 +624,7 @@ export default function HomePage() {
         onZoomOut={zoomOut}
         onResetZoom={resetZoom}
         onFitToScreen={fitToScreen}
+        isLightBg={(() => { const r=parseInt(worldBgColor.slice(1,3),16),g=parseInt(worldBgColor.slice(3,5),16),b=parseInt(worldBgColor.slice(5,7),16); return (0.299*r+0.587*g+0.114*b)>140; })()}
       />
 
       {/* ── Layers panel ── */}
@@ -605,10 +644,21 @@ export default function HomePage() {
         onMergeLayerDown={handleMergeLayerDown}
         onFlipLayerH={handleFlipLayerH}
         onFlipLayerV={handleFlipLayerV}
+        isLightBg={(() => { const r=parseInt(worldBgColor.slice(1,3),16),g=parseInt(worldBgColor.slice(3,5),16),b=parseInt(worldBgColor.slice(5,7),16); return (0.299*r+0.587*g+0.114*b)>140; })()}
       />
 
+      {/* ── Toolbar Toggle Button ── */}
+      <button
+        onClick={() => setToolbarVisible((v) => !v)}
+        className="fixed bottom-6 right-6 z-[250] p-3 rounded-xl bg-[#141832]/90 border border-[#8cb9e0]/20 text-[#8cb9e0] shadow-2xl backdrop-blur-xl hover:bg-[#8cb9e0]/10 transition-all active:scale-95"
+        title={toolbarVisible ? "Hide Toolbar" : "Show Toolbar"}
+      >
+        {toolbarVisible ? <EyeOff size={20} /> : <Eye size={20} />}
+      </button>
+
       {/* ── Toolbar ── */}
-      <Toolbar
+      {toolbarVisible && (
+        <Toolbar
         tool={tool}
         onToolChange={setTool}
         color={color}
@@ -663,7 +713,11 @@ export default function HomePage() {
         roomCode={roomCode}
         userAvatar={isSignedIn ? <UserButton /> : null}
         onCanvasSizeOpen={() => setCanvasSizeDialogOpen(true)}
+        worldBgColor={worldBgColor}
+        onWorldBgColorChange={setWorldBgColor}
+        isLightBg={(() => { const r=parseInt(worldBgColor.slice(1,3),16),g=parseInt(worldBgColor.slice(3,5),16),b=parseInt(worldBgColor.slice(5,7),16); return (0.299*r+0.587*g+0.114*b)>140; })()}
       />
+      )}
 
       {/* ── Dialogs ── */}
       <RoomDialog
@@ -697,22 +751,6 @@ export default function HomePage() {
             <h3 className="text-[#c7d8ec] text-lg font-semibold mb-4">
               Canvas Settings
             </h3>
-            <div className="mb-4">
-              <label className="block text-[#c7d8ec]/70 text-xs font-semibold mb-2 uppercase tracking-wider">
-                Background Color
-              </label>
-              <div className="flex items-center gap-2">
-                <input
-                  type="color"
-                  value={worldBgColor}
-                  onChange={(e) => setWorldBgColor(e.target.value)}
-                  className="w-8 h-8 rounded cursor-pointer border-none p-0 bg-transparent"
-                />
-                <span className="text-[#c7d8ec] font-mono text-sm">
-                  {worldBgColor.toUpperCase()}
-                </span>
-              </div>
-            </div>
             <label className="block text-[#c7d8ec]/70 text-xs font-semibold mb-2 uppercase tracking-wider">
               Canvas Size
             </label>
